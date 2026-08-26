@@ -25,6 +25,7 @@ The script finds the first and last pixels with non-zero alpha, resizes the sour
 - Analyzes unique visibility states instead of every frame when only static-layer In/Out visibility changes.
 - Recognizes still footage, solids, recursively static precomps, plain static Text Layers, and safe static Shape Layers.
 - Can recursively crop nested precomps from the deepest level upward.
+- Accepts one or more compositions selected directly in the Project panel; recursive nested-precomp processing is enabled by default for this workflow.
 - Propagates the selected branch's actually used time range in `Recursive + Selected Layers` mode.
 - Preserves every project usage of a modified precomposition.
 - Supports arbitrary 2D parent-chain depth and 2D Collapse Transformations.
@@ -105,9 +106,19 @@ Copy the JSX file into the `Scripts` directory of your installed After Effects v
 
 All actual modifications are placed in one Undo Group.
 
+### Selecting compositions in the Project panel
+
+Instead of selecting a precomp layer, select one or more compositions directly in the Project panel and run the script. `Recursively crop nested precomps first` is enabled by default in this workflow, so the deepest nested compositions are processed before each selected root composition. With the default `Current frame only` mode, each selected root's current time is mapped through nested In/Out, Start Time, Stretch, and Time Remap into the recursive branch.
+
+If precomp layers are also selected in an active composition, the layer selection takes priority. Deselect those precomp layers to process the Project-panel selection instead.
+
+`Used source frames — selected layers in active comp` is unavailable for a Project-panel selection because that workflow has no selected usage layers.
+
 ---
 
 # Time-analysis modes
+
+`Current frame only` is the default. This keeps the common run fast and predictable; explicitly choose a full-range or used-source-frame mode for animated content.
 
 ## 1. Entire source composition — every frame
 
@@ -364,7 +375,8 @@ Prefixes:
 ## Normal safe workflow
 
 ```text
-Scan: Used source frames — all project usages
+Scan: Current frame only for a static frame;
+      Used source frames — all project usages for animation
 Frame step: 1
 Auto static optimization: ON
 Preserve direct children: ON
@@ -462,6 +474,9 @@ Project/branch batch analysis with a summary such as:
 
 ## 0.4.0
 
+- Made `Current frame only` the default analysis mode.
+- Added direct Project-panel composition selection with recursive processing enabled by default.
+- Moved `Crop` and `Cancel` to opposite sides of the dialog.
 - Added optional safe Anchor Point centering through Position compensation.
 - Added recursive propagation of selected-usage source times.
 - Added one project-wide usage index.

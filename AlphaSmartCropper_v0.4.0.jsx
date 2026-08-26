@@ -21,6 +21,8 @@
  *     can be conservatively proven time-invariant;
  *   - can scan only source times actually referenced by precomp usages;
  *   - can recursively crop nested precomps deepest-first;
+ *   - accepts either selected precomp layers in an active composition or
+ *     compositions selected directly in the Project panel;
  *   - can propagate the selected parent usage time range down a recursive
  *     precomp branch instead of scanning unrelated nested-comp time;
  *   - builds a project-wide usage index once per run instead of rescanning the
@@ -55,25 +57,32 @@
         }
 
         var activeComp = app.project.activeItem;
-        if (!activeComp || !(activeComp instanceof CompItem)) {
-            alert(SCRIPT_NAME + ": open a composition and select one or more precomp layers.");
-            return;
+        var selectedLayers = [];
+        var selectedPrecomps = [];
+        var selectionMode = "project";
+
+        if (activeComp && (activeComp instanceof CompItem)) {
+            try { selectedLayers = activeComp.selectedLayers || []; } catch (selectedLayersErr) {}
+            selectedPrecomps = collectSelectedPrecomps(selectedLayers);
+            if (selectedPrecomps.length > 0) selectionMode = "layers";
         }
 
-        var selectedLayers = activeComp.selectedLayers;
-        if (!selectedLayers || selectedLayers.length === 0) {
-            alert(SCRIPT_NAME + ": select one or more precomp layers.");
-            return;
-        }
-
-        var selectedPrecomps = collectSelectedPrecomps(selectedLayers);
+        // If no precomp layers are selected in an active composition, fall back
+        // to CompItems selected directly in the Project panel.
         if (selectedPrecomps.length === 0) {
-            alert(SCRIPT_NAME + ": none of the selected layers is a precomposition.");
+            selectedLayers = [];
+            selectedPrecomps = collectSelectedProjectComps();
+            selectionMode = "project";
+        }
+
+        if (selectedPrecomps.length === 0) {
+            alert(SCRIPT_NAME + ": select one or more precomp layers in an active composition, or select one or more compositions in the Project panel.");
             return;
         }
 
-        var settings = showSettingsDialog(selectedPrecomps);
+        var settings = showSettingsDialog(selectedPrecomps, selectionMode);
         if (!settings) return;
+        settings.selectionMode = selectionMode;
 
         // Keep actual layer references. This is more reliable than names and also
         // lets the "selected usages" scan mode distinguish multiple instances
@@ -87,7 +96,8 @@
             usageIndex: buildProjectUsageIndex(),
             staticMemo: {},
             recursiveSelectedTimes: null,
-            recursiveSelectedNotes: {}
+            recursiveSelectedNotes: {},
+            recursiveTimeLabel: null
         };
 
         var cropQueue = settings.recursiveCrop
@@ -95,14 +105,18 @@
             : selectedPrecomps;
 
         var report = [];
+        report.push("INFO selection: " + (selectionMode === "project" ? "Project panel composition(s)" : "precomp layer(s) in active composition") + "; roots=" + selectedPrecomps.length + ".");
 
-        if (settings.recursiveCrop && settings.scanMode === 2) {
-            var branchPlan = buildRecursiveSelectedTimeMap(selectedPrecomps, settings);
+        var propagateSelectedBranch = settings.recursiveCrop && settings.scanMode === 2;
+        var propagateProjectCurrent = settings.recursiveCrop && settings.scanMode === 4 && selectionMode === "project";
+        if (propagateSelectedBranch || propagateProjectCurrent) {
+            var branchPlan = buildRecursiveSelectedTimeMap(selectedPrecomps, settings, propagateProjectCurrent);
             settings.runtime.recursiveSelectedTimes = branchPlan.timeMap;
             settings.runtime.recursiveSelectedNotes = branchPlan.noteMap;
-            report.push("INFO recursive selected-usage time propagation: " + branchPlan.compCount + " comp(s) received constrained source-time samples.");
+            settings.runtime.recursiveTimeLabel = propagateProjectCurrent ? "recursive Project-panel current frame" : "recursive selected branch";
+            report.push("INFO recursive time propagation: " + branchPlan.compCount + " comp(s) received constrained source-time samples.");
             if (branchPlan.fallbackCount > 0) {
-                report.push("WARN recursive selected-usage propagation used full-timeline safety fallback for " + branchPlan.fallbackCount + " nested comp(s) because a nested usage had effects that may alter temporal sampling.");
+                report.push("WARN recursive time propagation used full-timeline safety fallback for " + branchPlan.fallbackCount + " nested comp(s) because a nested usage had effects that may alter temporal sampling.");
             }
         }
         if (settings.recursiveCrop && cropQueue.length > selectedPrecomps.length) {
@@ -131,15 +145,18 @@
     // UI
     // -------------------------------------------------------------------------
 
-    function showSettingsDialog(precomps) {
+    function showSettingsDialog(precomps, selectionMode) {
         var dlg = new Window("dialog", SCRIPT_NAME + " " + VERSION);
         dlg.orientation = "column";
         dlg.alignChildren = ["fill", "top"];
         dlg.spacing = 10;
         dlg.margins = 14;
 
+        var introText = selectionMode === "project"
+            ? "Crop Project-panel compositions and, by default, their nested precomps by rendered alpha."
+            : "Crop selected precomp layers by rendered alpha, not by layer dimensions.";
         var intro = dlg.add("statictext", undefined,
-            "Crop selected precomps by rendered alpha, not by layer dimensions.",
+            introText,
             {multiline: true});
         intro.alignment = ["fill", "top"];
 
@@ -157,14 +174,19 @@
             "Work area — every frame",
             "Current frame only"
         ]);
-        scanDrop.selection = 1;
+        scanDrop.selection = 4;
         scanDrop.preferredSize.width = 365;
+        if (selectionMode === "project") {
+            try { scanDrop.items[2].enabled = false; } catch (disableSelectedModeErr) {}
+        }
 
         var stepRow = scanPanel.add("group");
         stepRow.add("statictext", undefined, "Frame step:");
         var frameStepEdit = stepRow.add("edittext", undefined, "1");
         frameStepEdit.characters = 6;
         var stepHelp = stepRow.add("statictext", undefined, "1 = exact; >1 can miss animation extremes");
+        frameStepEdit.enabled = false;
+        stepHelp.enabled = false;
 
         var staticOptimizeCheck = scanPanel.add("checkbox", undefined, "Auto: optimize static / visibility-only timelines");
         staticOptimizeCheck.value = true;
@@ -226,19 +248,29 @@
         skipEssentialCheck.helpTip = "Essential Properties can override source values per precomp instance, so one source-only alpha scan may not describe every usage. Disable only if you know the exposed properties cannot affect alpha/bounds.";
 
         var recursiveCheck = safePanel.add("checkbox", undefined, "Recursively crop nested precomps first");
-        recursiveCheck.value = false;
+        recursiveCheck.value = selectionMode === "project";
         recursiveCheck.helpTip = "Processes unique nested precomps deepest-first. Shared nested comps are modified globally and every project usage is compensated. In Selected Layers scan mode, only source times reachable from the selected branch are analyzed; this can intentionally ignore animation used only by unrelated usages.";
 
         var dryRunCheck = safePanel.add("checkbox", undefined, "Analyze only (Dry Run) — do not modify the project");
         dryRunCheck.value = false;
 
-        var estimate = dlg.add("statictext", undefined, "Selected source precomps: " + precomps.length);
+        var estimateLabel = selectionMode === "project" ? "Selected Project-panel compositions: " : "Selected source precomps: ";
+        var estimate = dlg.add("statictext", undefined, estimateLabel + precomps.length);
         estimate.alignment = ["fill", "top"];
 
         var buttons = dlg.add("group");
-        buttons.alignment = ["right", "top"];
-        var cancelButton = buttons.add("button", undefined, "Cancel", {name: "cancel"});
-        var okButton = buttons.add("button", undefined, "Crop", {name: "ok"});
+        buttons.alignment = ["fill", "top"];
+        buttons.alignChildren = ["fill", "center"];
+        var cropGroup = buttons.add("group");
+        cropGroup.alignment = ["left", "center"];
+        var okButton = cropGroup.add("button", undefined, "Crop", {name: "ok"});
+        okButton.preferredSize.width = 120;
+        var buttonSpacer = buttons.add("group");
+        buttonSpacer.alignment = ["fill", "fill"];
+        var cancelGroup = buttons.add("group");
+        cancelGroup.alignment = ["right", "center"];
+        var cancelButton = cancelGroup.add("button", undefined, "Cancel", {name: "cancel"});
+        cancelButton.preferredSize.width = 120;
 
         if (dlg.show() !== 1) return null;
 
@@ -257,6 +289,11 @@
         var frameStep = parseInt(frameStepEdit.text, 10);
         if (isNaN(frameStep) || frameStep < 1) {
             alert(SCRIPT_NAME + ": Frame step must be an integer >= 1.");
+            return null;
+        }
+
+        if (selectionMode === "project" && scanDrop.selection.index === 2) {
+            alert(SCRIPT_NAME + ": Selected Layers scan mode is unavailable for compositions selected in the Project panel.");
             return null;
         }
 
@@ -347,6 +384,23 @@
         return comps;
     }
 
+    function collectSelectedProjectComps() {
+        var comps = [];
+        var seen = {};
+        var selection = [];
+        try { selection = app.project.selection || []; } catch (e) {}
+
+        for (var i = 0; i < selection.length; i++) {
+            var item = selection[i];
+            if (!(item instanceof CompItem)) continue;
+            var key = String(item.id);
+            if (seen[key]) continue;
+            seen[key] = true;
+            comps.push(item);
+        }
+        return comps;
+    }
+
     function buildSelectedUsageMap(selectedLayers) {
         var map = {};
         for (var i = 0; i < selectedLayers.length; i++) {
@@ -421,7 +475,7 @@
         return ordered;
     }
 
-    function buildRecursiveSelectedTimeMap(rootComps, settings) {
+    function buildRecursiveSelectedTimeMap(rootComps, settings, seedFromProjectCurrent) {
         var records = {};
         var queue = [];
         var queued = {};
@@ -480,9 +534,15 @@
             enqueue(comp);
         }
 
-        // Seed the graph with the selected layer instances in the active comp.
+        // Seed either from the selected Project-panel compositions' own current
+        // times or from selected layer instances in the active composition.
         for (var r = 0; r < rootComps.length; r++) {
             var root = rootComps[r];
+            if (seedFromProjectCurrent) {
+                addTime(root, root.time);
+                continue;
+            }
+
             var selected = settings.selectedUsageMap[String(root.id)] || [];
             if (selected.length === 0) continue;
 
@@ -1279,14 +1339,16 @@
         // In recursive + selected-usage mode, the selected parent frame range is
         // propagated down the actual nested-precomp graph before any crop occurs.
         // This avoids falling back to unrelated project usages for nested comps.
-        if (settings.scanMode === 2 && settings.recursiveCrop && settings.runtime && settings.runtime.recursiveSelectedTimes) {
+        var hasRecursiveTimePlan = settings.recursiveCrop && settings.runtime && settings.runtime.recursiveSelectedTimes &&
+            (settings.scanMode === 2 || (settings.scanMode === 4 && settings.selectionMode === "project"));
+        if (hasRecursiveTimePlan) {
             var recursiveTimes = settings.runtime.recursiveSelectedTimes[String(comp.id)];
             if (recursiveTimes && recursiveTimes.length > 0) {
                 var recursiveNotes = settings.runtime.recursiveSelectedNotes[String(comp.id)] || [];
                 for (var rn = 0; rn < recursiveNotes.length; rn++) notes.push(recursiveNotes[rn]);
                 return {
                     times: recursiveTimes.slice(0),
-                    label: "recursive selected branch",
+                    label: settings.runtime.recursiveTimeLabel || "recursive branch",
                     notes: notes
                 };
             }

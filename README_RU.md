@@ -35,6 +35,7 @@ Alpha Smart Cropper — JSX-скрипт для автоматической о�
   - обычный статический Text Layer без Text Animators;
   - статический Shape Layer без анимации и без Wiggle-подобных операторов.
 - Поддерживает рекурсивную обрезку вложенных прекомпозиций снизу вверх.
+- Позволяет выбрать одну или несколько композиций прямо в Project panel; для такого запуска рекурсивная обработка вложенных прекомпозиций включается по умолчанию.
 - В режиме `Recursive + Selected Layers` протягивает реально используемый диапазон времени вниз по цепочке nested precomp.
 - Сохраняет положение **всех usages** изменяемой прекомпозиции в проекте.
 - Поддерживает произвольную глубину 2D-parent chain.
@@ -122,9 +123,19 @@ AlphaSmartCropper_v0.4.0.jsx
 
 Вся фактическая модификация помещается в один Undo Group.
 
+### Выбор композиции прямо в Project panel
+
+Вместо выделения precomp layer можно выбрать одну или несколько композиций непосредственно в панели Project и запустить скрипт. В этом режиме опция `Recursively crop nested precomps first` включена по умолчанию: сначала обрабатываются самые глубокие вложенные композиции, затем выбранная корневая композиция. При стандартном режиме `Current frame only` время выбранной корневой композиции корректно протягивается через In/Out, Start Time, Stretch и Time Remap во вложенную ветку.
+
+Если одновременно в активной композиции выделены precomp layers, приоритет имеет выбор слоёв. Чтобы обработать именно Project-panel selection, снимите выделение с precomp layers.
+
+Режим `Used source frames — selected layers in active comp` для Project-panel selection недоступен, поскольку у такого запуска нет выбранных usage-слоёв.
+
 ---
 
 # Режимы анализа времени
+
+По умолчанию выбран `Current frame only`. Это делает обычный запуск быстрым и предсказуемым; для анимированных композиций необходимо явно выбрать анализ всего диапазона или реально используемых source frames.
 
 ## 1. Entire source composition — every frame
 
@@ -620,7 +631,8 @@ cacheHits=...
 ## Обычный безопасный рабочий режим
 
 ```text
-Scan: Used source frames — all project usages
+Scan: Current frame only для статичного кадра;
+      Used source frames — all project usages для анимации
 Frame step: 1
 Auto temporal optimization: ON
 Padding: 0
@@ -736,6 +748,9 @@ dynamic layers bounds
 
 ## 0.4.0
 
+- Режимом анализа по умолчанию сделан `Current frame only`.
+- Добавлен выбор композиций непосредственно в Project panel с включённой по умолчанию рекурсивной обработкой.
+- Кнопки `Crop` и `Cancel` разнесены по противоположным сторонам окна.
 - Добавлен опциональный безопасный режим центрирования Anchor Point через компенсацию Position.
 - Добавлена рекурсивная передача selected usage source-times вниз по nested branch.
 - Добавлен единый project usage index.
