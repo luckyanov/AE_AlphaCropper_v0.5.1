@@ -38,6 +38,7 @@ The script finds the first and last pixels with non-zero alpha, resizes the sour
 - Persists the last-used settings between runs through `app.settings`.
 - Long scans can be interrupted with `Stop analysis`.
 - Project-wide mode previews every composition and requires a separate confirmation before applying changes.
+- Keeps a small launcher palette open so the selection can be changed and Crop can be run again without rerunning the JSX.
 - Builds the project-wide usage index once per run.
 - Caches repeated rectangular `sampleImage()` queries inside the alpha analyzer.
 
@@ -94,19 +95,24 @@ AlphaSmartCropper_v0.5.0.jsx
 
 ### Permanent installation
 
-Copy the JSX file into the `Scripts` directory of your installed After Effects version, then restart After Effects. A ScriptUI Panel installation is not required: version 0.5.0 opens its own dialog.
+Copy the JSX into the installed After Effects `Scripts` directory without a version suffix, for example:
+
+```text
+C:\Program Files\Adobe\Adobe After Effects 2025\Support Files\Scripts\AlphaSmartCropper.jsx
+```
+
+then restart After Effects. A ScriptUI Panel installation is not required: version 0.5.0 opens a persistent modeless launcher palette.
 
 ---
 
 ## Basic usage
 
-1. Open a parent composition.
-2. Select one or more **precomp layers**.
-3. Run `AlphaSmartCropper_v0.5.0.jsx`.
-4. Select the time-analysis mode.
-5. For a new project type, first run with `Analyze only (Dry Run)` enabled.
-6. Review the report.
-7. Disable Dry Run and perform the actual crop.
+1. Run `AlphaSmartCropper_v0.5.0.jsx` or the installed `AlphaSmartCropper.jsx`.
+2. Select one or more **precomp layers**, or compositions in the Project panel.
+3. Click `Crop...` in the launcher.
+4. Choose the analysis settings and perform the crop.
+5. After reviewing the report, change the selection and click `Crop...` again.
+6. Close the launcher with its title-bar X or the `Close` button.
 
 All actual modifications are placed in one Undo Group.
 
@@ -515,6 +521,7 @@ Project/branch batch analysis with a summary such as:
 - Added a two-pass project-wide preview with a combined summary and explicit apply confirmation.
 - Allowed project-wide mode to run without preselected crop roots.
 - Renamed the script to `AlphaSmartCropper_v0.5.0.jsx`.
+- Added a persistent launcher palette for repeated runs with a new selection; it closes through the title-bar X or `Close` button.
 
 ## 0.4.0
 

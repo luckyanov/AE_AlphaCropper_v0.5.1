@@ -1,5 +1,9 @@
+#target aftereffects
+#targetengine "AlphaSmartCropperEngine"
+
 /**
  * AlphaSmartCropper_v0.5.0.jsx
+ * by Stray Token / Luckyanov D.S.
  * Version 0.5.0
  *
  * Alpha-aware precomp cropper for Adobe After Effects.
@@ -26,6 +30,8 @@
  *   - persists settings and provides Current Frame, Safe Animation and Selected
  *     Branch presets;
  *   - supports cancellable project-wide preview followed by explicit apply;
+ *   - stays available in a persistent modeless launcher for repeated runs with
+ *     different layer or Project-panel selections;
  *   - can propagate the selected parent usage time range down a recursive
  *     precomp branch instead of scanning unrelated nested-comp time;
  *   - builds a project-wide usage index once per run instead of rescanning the
@@ -53,8 +59,80 @@
     var VERSION = "0.5.0";
     var SCRIPT_NAME = "Alpha Smart Cropper";
     var SETTINGS_SECTION = "AlphaSmartCropper_0_5";
+    var LAUNCHER_GLOBAL_KEY = "__AlphaSmartCropperLauncher__";
 
-    function main() {
+    function showLauncher() {
+        try {
+            var existing = $.global[LAUNCHER_GLOBAL_KEY];
+            if (existing) {
+                existing.show();
+                try { existing.active = true; } catch (activateErr) {}
+                return;
+            }
+        } catch (existingErr) {}
+
+        var win = new Window("palette", SCRIPT_NAME + " " + VERSION);
+        win.orientation = "column";
+        win.alignChildren = ["fill", "top"];
+        win.spacing = 10;
+        win.margins = 14;
+
+        var intro = win.add("statictext", undefined,
+            "Select precomp layers or Project-panel compositions, then run Crop. The launcher stays open so you can change the selection and run again.",
+            {multiline: true});
+        intro.preferredSize.width = 430;
+
+        var status = win.add("statictext", undefined, "Ready.");
+        status.alignment = ["fill", "top"];
+
+        var buttons = win.add("group");
+        buttons.alignment = ["fill", "top"];
+        buttons.alignChildren = ["fill", "center"];
+
+        var cropButton = buttons.add("button", undefined, "Crop...", {name: "ok"});
+        cropButton.preferredSize.width = 140;
+        var spacer = buttons.add("group");
+        spacer.alignment = ["fill", "fill"];
+        var closeButton = buttons.add("button", undefined, "Close", {name: "cancel"});
+        closeButton.preferredSize.width = 110;
+
+        var running = false;
+        cropButton.onClick = function () {
+            if (running) return;
+            running = true;
+            cropButton.enabled = false;
+            closeButton.enabled = false;
+            status.text = "Running...";
+            try { win.update(); } catch (beforeRunUpdateErr) {}
+
+            try {
+                runCropWorkflow();
+                status.text = "Ready — change the selection and run again.";
+            } catch (err) {
+                status.text = "Ready after an error.";
+                alert(SCRIPT_NAME + ": " + errorToString(err));
+            } finally {
+                running = false;
+                cropButton.enabled = true;
+                closeButton.enabled = true;
+                try { win.update(); } catch (afterRunUpdateErr) {}
+            }
+        };
+
+        closeButton.onClick = function () {
+            win.close();
+        };
+
+        win.onClose = function () {
+            try { $.global[LAUNCHER_GLOBAL_KEY] = null; } catch (clearGlobalErr) {}
+        };
+
+        try { $.global[LAUNCHER_GLOBAL_KEY] = win; } catch (storeGlobalErr) {}
+        win.center();
+        win.show();
+    }
+
+    function runCropWorkflow() {
         if (!app.project) {
             alert(SCRIPT_NAME + ": no project is open.");
             return;
@@ -2358,6 +2436,6 @@
         return s;
     }
 
-    main();
+    showLauncher();
 
 })(this);
