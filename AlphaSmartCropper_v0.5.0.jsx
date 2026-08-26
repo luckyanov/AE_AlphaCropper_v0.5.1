@@ -1,6 +1,6 @@
 /**
- * AlphaSmartCropper.jsx
- * Version 0.4.0
+ * AlphaSmartCropper_v0.5.0.jsx
+ * Version 0.5.0
  *
  * Alpha-aware precomp cropper for Adobe After Effects.
  *
@@ -23,6 +23,9 @@
  *   - can recursively crop nested precomps deepest-first;
  *   - accepts either selected precomp layers in an active composition or
  *     compositions selected directly in the Project panel;
+ *   - persists settings and provides Current Frame, Safe Animation and Selected
+ *     Branch presets;
+ *   - supports cancellable project-wide preview followed by explicit apply;
  *   - can propagate the selected parent usage time range down a recursive
  *     precomp branch instead of scanning unrelated nested-comp time;
  *   - builds a project-wide usage index once per run instead of rescanning the
@@ -47,8 +50,9 @@
  */
 
 (function AlphaSmartCropper(thisObj) {
-    var VERSION = "0.4.0";
+    var VERSION = "0.5.0";
     var SCRIPT_NAME = "Alpha Smart Cropper";
+    var SETTINGS_SECTION = "AlphaSmartCropper_0_5";
 
     function main() {
         if (!app.project) {
@@ -72,16 +76,21 @@
         if (selectedPrecomps.length === 0) {
             selectedLayers = [];
             selectedPrecomps = collectSelectedProjectComps();
-            selectionMode = "project";
-        }
-
-        if (selectedPrecomps.length === 0) {
-            alert(SCRIPT_NAME + ": select one or more precomp layers in an active composition, or select one or more compositions in the Project panel.");
-            return;
+            selectionMode = selectedPrecomps.length > 0 ? "project" : "none";
         }
 
         var settings = showSettingsDialog(selectedPrecomps, selectionMode);
         if (!settings) return;
+
+        if (settings.projectWide) {
+            selectedPrecomps = collectAllProjectComps();
+            selectionMode = "project-wide";
+            settings.recursiveCrop = true;
+        }
+        if (selectedPrecomps.length === 0) {
+            alert(SCRIPT_NAME + ": select precomp layers or Project-panel compositions, or enable Project-wide preview.");
+            return;
+        }
         settings.selectionMode = selectionMode;
 
         // Keep actual layer references. This is more reliable than names and also
@@ -97,7 +106,8 @@
             staticMemo: {},
             recursiveSelectedTimes: null,
             recursiveSelectedNotes: {},
-            recursiveTimeLabel: null
+            recursiveTimeLabel: null,
+            cancelled: false
         };
 
         var cropQueue = settings.recursiveCrop
@@ -105,7 +115,10 @@
             : selectedPrecomps;
 
         var report = [];
-        report.push("INFO selection: " + (selectionMode === "project" ? "Project panel composition(s)" : "precomp layer(s) in active composition") + "; roots=" + selectedPrecomps.length + ".");
+        var selectionLabel = selectionMode === "project-wide"
+            ? "every composition in the project"
+            : (selectionMode === "project" ? "Project panel composition(s)" : "precomp layer(s) in active composition");
+        report.push("INFO selection: " + selectionLabel + "; roots=" + selectedPrecomps.length + ".");
 
         var propagateSelectedBranch = settings.recursiveCrop && settings.scanMode === 2;
         var propagateProjectCurrent = settings.recursiveCrop && settings.scanMode === 4 && selectionMode === "project";
@@ -123,12 +136,41 @@
             report.push("INFO recursive crop: " + cropQueue.length + " unique precomp(s), deepest first (" + selectedPrecomps.length + " selected root(s)).");
         }
 
-        var totalFrames = estimateTotalFrames(cropQueue, settings);
-        var progress = createProgressWindow(totalFrames);
+        if (settings.projectWide && !settings.dryRun) {
+            settings.dryRun = true;
+            runCropQueue(cropQueue, settings, report, "project-wide preview");
 
-        app.beginUndoGroup(SCRIPT_NAME);
+            if (settings.runtime.cancelled) {
+                showReport(report);
+                return;
+            }
+
+            if (!showProjectPreviewReport(report)) return;
+
+            settings.runtime.cancelled = false;
+            settings.dryRun = false;
+            report = ["INFO project-wide preview approved; re-analyzing and applying safe crops deepest-first."];
+            runCropQueue(cropQueue, settings, report, "project-wide apply");
+            showReport(report);
+            return;
+        }
+
+        runCropQueue(cropQueue, settings, report, settings.dryRun ? "dry run" : "crop");
+        showReport(report);
+    }
+
+    function runCropQueue(cropQueue, settings, report, phaseLabel) {
+        var totalFrames = estimateTotalFrames(cropQueue, settings);
+        var progress = createProgressWindow(totalFrames, phaseLabel);
+
+        app.beginUndoGroup(SCRIPT_NAME + " — " + phaseLabel);
         try {
             for (var i = 0; i < cropQueue.length; i++) {
+                if (settings.runtime.cancelled || (progress && progress.isCancelled())) {
+                    settings.runtime.cancelled = true;
+                    report.push("STOP analysis cancelled by user after " + i + " / " + cropQueue.length + " composition(s).");
+                    break;
+                }
                 cropPrecomp(cropQueue[i], settings, report, progress);
             }
         } catch (err) {
@@ -137,8 +179,6 @@
             app.endUndoGroup();
             if (progress) progress.close();
         }
-
-        showReport(report);
     }
 
     // -------------------------------------------------------------------------
@@ -146,6 +186,7 @@
     // -------------------------------------------------------------------------
 
     function showSettingsDialog(precomps, selectionMode) {
+        var saved = loadSavedSettings();
         var dlg = new Window("dialog", SCRIPT_NAME + " " + VERSION);
         dlg.orientation = "column";
         dlg.alignChildren = ["fill", "top"];
@@ -154,11 +195,28 @@
 
         var introText = selectionMode === "project"
             ? "Crop Project-panel compositions and, by default, their nested precomps by rendered alpha."
-            : "Crop selected precomp layers by rendered alpha, not by layer dimensions.";
+            : (selectionMode === "none"
+                ? "No crop roots selected. Enable Project-wide preview, or cancel and select layers/compositions."
+                : "Crop selected precomp layers by rendered alpha, not by layer dimensions.");
         var intro = dlg.add("statictext", undefined,
             introText,
             {multiline: true});
         intro.alignment = ["fill", "top"];
+
+        var presetRow = dlg.add("group");
+        presetRow.alignment = ["fill", "top"];
+        presetRow.add("statictext", undefined, "Preset:");
+        var presetDrop = presetRow.add("dropdownlist", undefined, [
+            "Last used / Custom",
+            "Current Frame",
+            "Safe Animation",
+            "Selected Branch"
+        ]);
+        presetDrop.selection = 0;
+        presetDrop.preferredSize.width = 220;
+        if (selectionMode !== "layers") {
+            try { presetDrop.items[3].enabled = false; } catch (disableBranchPresetErr) {}
+        }
 
         var scanPanel = dlg.add("panel", undefined, "Time analysis");
         scanPanel.orientation = "column";
@@ -174,34 +232,28 @@
             "Work area — every frame",
             "Current frame only"
         ]);
-        scanDrop.selection = 4;
+        var initialScanMode = saved.scanMode !== null ? saved.scanMode : 4;
+        if (selectionMode !== "layers" && initialScanMode === 2) initialScanMode = 4;
+        scanDrop.selection = initialScanMode;
         scanDrop.preferredSize.width = 365;
-        if (selectionMode === "project") {
+        if (selectionMode !== "layers") {
             try { scanDrop.items[2].enabled = false; } catch (disableSelectedModeErr) {}
         }
 
         var stepRow = scanPanel.add("group");
         stepRow.add("statictext", undefined, "Frame step:");
-        var frameStepEdit = stepRow.add("edittext", undefined, "1");
+        var frameStepEdit = stepRow.add("edittext", undefined, saved.frameStep !== null ? String(saved.frameStep) : "1");
         frameStepEdit.characters = 6;
         var stepHelp = stepRow.add("statictext", undefined, "1 = exact; >1 can miss animation extremes");
-        frameStepEdit.enabled = false;
-        stepHelp.enabled = false;
 
         var staticOptimizeCheck = scanPanel.add("checkbox", undefined, "Auto: optimize static / visibility-only timelines");
-        staticOptimizeCheck.value = true;
+        staticOptimizeCheck.value = saved.autoStatic !== null ? saved.autoStatic : true;
         staticOptimizeCheck.helpTip = "Conservative optimization. Fully static comps are scanned once. If all rendered content is static and only layer In/Out visibility changes, one representative frame per distinct visibility state is scanned. Plain static Text/Shape layers are supported; uncertain temporal cases fall back to normal frame scanning.";
 
         var usageHelp = scanPanel.add("statictext", undefined,
             "Used-frame modes map parent-comp frame times through In/Out, Start Time, Stretch and Time Remap. With Recursive Crop + Selected Layers, the selected time range is propagated down the nested precomp branch.",
             {multiline: true});
         usageHelp.alignment = ["fill", "top"];
-
-        scanDrop.onChange = function () {
-            var enableStep = scanDrop.selection && scanDrop.selection.index !== 4;
-            frameStepEdit.enabled = enableStep;
-            stepHelp.enabled = enableStep;
-        };
 
         var cropPanel = dlg.add("panel", undefined, "Crop");
         cropPanel.orientation = "column";
@@ -210,12 +262,12 @@
 
         var paddingRow = cropPanel.add("group");
         paddingRow.add("statictext", undefined, "Padding (px):");
-        var paddingEdit = paddingRow.add("edittext", undefined, "0");
+        var paddingEdit = paddingRow.add("edittext", undefined, saved.padding !== null ? String(saved.padding) : "0");
         paddingEdit.characters = 8;
 
         var alphaRow = cropPanel.add("group");
         alphaRow.add("statictext", undefined, "Alpha epsilon:");
-        var alphaEdit = alphaRow.add("edittext", undefined, "0");
+        var alphaEdit = alphaRow.add("edittext", undefined, saved.alphaEpsilon !== null ? String(saved.alphaEpsilon) : "0");
         alphaEdit.characters = 10;
         var alphaHelp = alphaRow.add("statictext", undefined, "0 = any non-zero alpha");
         alphaEdit.helpTip = "Alpha samples with total alpha <= epsilon are treated as empty. Use 0 for strict non-zero alpha.";
@@ -226,35 +278,72 @@
         safePanel.margins = 10;
 
         var preserveChildrenCheck = safePanel.add("checkbox", undefined, "Preserve direct children of every precomp usage");
-        preserveChildrenCheck.value = true;
+        preserveChildrenCheck.value = saved.preserveChildren !== null ? saved.preserveChildren : true;
 
         var centerAnchorCheck = safePanel.add("checkbox", undefined, "Center resulting precomp Anchor Point (via Position)");
-        centerAnchorCheck.value = false;
+        centerAnchorCheck.value = saved.centerAnchor !== null ? saved.centerAnchor : true;
         centerAnchorCheck.helpTip = "Optional workflow convenience. Centers each usage Anchor Point after cropping and compensates Position. For safety, this mode skips a source comp if any usage is 3D, uses Collapse Transformations, has animated Anchor Point/Scale/Rotation, non-zero Skew, or an expression-driven transform needed for compensation.";
 
         var allowCollapse2DCheck = safePanel.add("checkbox", undefined, "Allow 2D Collapse Transformations usages");
-        allowCollapse2DCheck.value = true;
+        allowCollapse2DCheck.value = saved.allowCollapse2D !== null ? saved.allowCollapse2D : true;
         allowCollapse2DCheck.helpTip = "Safe for 2D precomp usages: the crop offset and usage Anchor Point offset cancel in the collapsed transform chain. Collapsed 3D usages remain blocked.";
 
         var skipSoloCheck = safePanel.add("checkbox", undefined, "Skip source comps that currently have Solo layers");
-        skipSoloCheck.value = true;
+        skipSoloCheck.value = saved.skipSolo !== null ? saved.skipSolo : true;
 
         var strictEffectsCheck = safePanel.add("checkbox", undefined, "Skip usages with effects (strict safety)");
-        strictEffectsCheck.value = false;
+        strictEffectsCheck.value = saved.strictUsageEffects !== null ? saved.strictUsageEffects : false;
         strictEffectsCheck.helpTip = "Some effects use layer-space coordinates. Leave unchecked for normal use; the report will warn about such usages.";
 
         var skipEssentialCheck = safePanel.add("checkbox", undefined, "Skip usages with Essential Properties (recommended)");
-        skipEssentialCheck.value = true;
+        skipEssentialCheck.value = saved.skipEssentialProperties !== null ? saved.skipEssentialProperties : true;
         skipEssentialCheck.helpTip = "Essential Properties can override source values per precomp instance, so one source-only alpha scan may not describe every usage. Disable only if you know the exposed properties cannot affect alpha/bounds.";
 
         var recursiveCheck = safePanel.add("checkbox", undefined, "Recursively crop nested precomps first");
-        recursiveCheck.value = selectionMode === "project";
+        recursiveCheck.value = selectionMode === "project" ? true : (saved.recursiveCrop !== null ? saved.recursiveCrop : false);
         recursiveCheck.helpTip = "Processes unique nested precomps deepest-first. Shared nested comps are modified globally and every project usage is compensated. In Selected Layers scan mode, only source times reachable from the selected branch are analyzed; this can intentionally ignore animation used only by unrelated usages.";
 
-        var dryRunCheck = safePanel.add("checkbox", undefined, "Analyze only (Dry Run) — do not modify the project");
-        dryRunCheck.value = false;
+        var projectWideCheck = safePanel.add("checkbox", undefined, "Project-wide preview, then apply all safe crops");
+        projectWideCheck.value = saved.projectWide !== null ? saved.projectWide : false;
+        projectWideCheck.helpTip = "Analyzes every composition in the project deepest-first, shows a complete summary, and only applies changes after explicit confirmation. The apply pass re-analyzes comps so recursive changes are reflected. Use Stop to cancel a long scan.";
 
-        var estimateLabel = selectionMode === "project" ? "Selected Project-panel compositions: " : "Selected source precomps: ";
+        var dryRunCheck = safePanel.add("checkbox", undefined, "Analyze only (Dry Run) — do not modify the project");
+        dryRunCheck.value = saved.dryRun !== null ? saved.dryRun : false;
+
+        function updateTimeControls() {
+            var enableStep = scanDrop.selection && scanDrop.selection.index !== 4;
+            frameStepEdit.enabled = enableStep;
+            stepHelp.enabled = enableStep;
+        }
+
+        function applyPreset(index) {
+            if (index === 1) {
+                scanDrop.selection = 4;
+                frameStepEdit.text = "1";
+                staticOptimizeCheck.value = true;
+            } else if (index === 2) {
+                scanDrop.selection = 0;
+                frameStepEdit.text = "1";
+                staticOptimizeCheck.value = true;
+            } else if (index === 3 && selectionMode === "layers") {
+                scanDrop.selection = 2;
+                frameStepEdit.text = "1";
+                staticOptimizeCheck.value = true;
+                recursiveCheck.value = true;
+            }
+            updateTimeControls();
+        }
+
+        presetDrop.onChange = function () {
+            if (presetDrop.selection) applyPreset(presetDrop.selection.index);
+        };
+
+        scanDrop.onChange = updateTimeControls;
+        updateTimeControls();
+
+        var estimateLabel = selectionMode === "project"
+            ? "Selected Project-panel compositions: "
+            : (selectionMode === "none" ? "Selected crop roots: " : "Selected source precomps: ");
         var estimate = dlg.add("statictext", undefined, estimateLabel + precomps.length);
         estimate.alignment = ["fill", "top"];
 
@@ -292,12 +381,16 @@
             return null;
         }
 
-        if (selectionMode === "project" && scanDrop.selection.index === 2) {
-            alert(SCRIPT_NAME + ": Selected Layers scan mode is unavailable for compositions selected in the Project panel.");
+        if (selectionMode !== "layers" && scanDrop.selection.index === 2) {
+            alert(SCRIPT_NAME + ": Selected Layers scan mode requires precomp layers selected in an active composition.");
+            return null;
+        }
+        if (projectWideCheck.value && scanDrop.selection.index === 2) {
+            alert(SCRIPT_NAME + ": Selected Branch cannot be combined with Project-wide preview. Choose Current Frame or Safe Animation.");
             return null;
         }
 
-        return {
+        var result = {
             // 0 entire, 1 all usages, 2 selected usages, 3 work area, 4 current
             scanMode: scanDrop.selection.index,
             frameStep: frameStep,
@@ -311,20 +404,97 @@
             strictUsageEffects: strictEffectsCheck.value,
             skipEssentialProperties: skipEssentialCheck.value,
             recursiveCrop: recursiveCheck.value,
+            projectWide: projectWideCheck.value,
             dryRun: dryRunCheck.value
+        };
+        saveSettings(result);
+        return result;
+    }
+
+    function loadSavedSettings() {
+        return {
+            scanMode: readIntSetting("scanMode"),
+            frameStep: readIntSetting("frameStep"),
+            autoStatic: readBoolSetting("autoStatic"),
+            padding: readFloatSetting("padding"),
+            alphaEpsilon: readFloatSetting("alphaEpsilon"),
+            preserveChildren: readBoolSetting("preserveChildren"),
+            centerAnchor: readBoolSetting("centerAnchor"),
+            allowCollapse2D: readBoolSetting("allowCollapse2D"),
+            skipSolo: readBoolSetting("skipSolo"),
+            strictUsageEffects: readBoolSetting("strictUsageEffects"),
+            skipEssentialProperties: readBoolSetting("skipEssentialProperties"),
+            recursiveCrop: readBoolSetting("recursiveCrop"),
+            projectWide: readBoolSetting("projectWide"),
+            dryRun: readBoolSetting("dryRun")
         };
     }
 
-    function createProgressWindow(totalFrames) {
+    function saveSettings(settings) {
         try {
-            var win = new Window("palette", SCRIPT_NAME + " — scanning alpha");
+            app.settings.saveSetting(SETTINGS_SECTION, "scanMode", String(settings.scanMode));
+            app.settings.saveSetting(SETTINGS_SECTION, "frameStep", String(settings.frameStep));
+            app.settings.saveSetting(SETTINGS_SECTION, "autoStatic", settings.autoStatic ? "1" : "0");
+            app.settings.saveSetting(SETTINGS_SECTION, "padding", String(settings.padding));
+            app.settings.saveSetting(SETTINGS_SECTION, "alphaEpsilon", String(settings.alphaEpsilon));
+            app.settings.saveSetting(SETTINGS_SECTION, "preserveChildren", settings.preserveChildren ? "1" : "0");
+            app.settings.saveSetting(SETTINGS_SECTION, "centerAnchor", settings.centerAnchor ? "1" : "0");
+            app.settings.saveSetting(SETTINGS_SECTION, "allowCollapse2D", settings.allowCollapse2D ? "1" : "0");
+            app.settings.saveSetting(SETTINGS_SECTION, "skipSolo", settings.skipSolo ? "1" : "0");
+            app.settings.saveSetting(SETTINGS_SECTION, "strictUsageEffects", settings.strictUsageEffects ? "1" : "0");
+            app.settings.saveSetting(SETTINGS_SECTION, "skipEssentialProperties", settings.skipEssentialProperties ? "1" : "0");
+            app.settings.saveSetting(SETTINGS_SECTION, "recursiveCrop", settings.recursiveCrop ? "1" : "0");
+            app.settings.saveSetting(SETTINGS_SECTION, "projectWide", settings.projectWide ? "1" : "0");
+            app.settings.saveSetting(SETTINGS_SECTION, "dryRun", settings.dryRun ? "1" : "0");
+        } catch (e) {}
+    }
+
+    function readRawSetting(key) {
+        try {
+            if (app.settings.haveSetting(SETTINGS_SECTION, key)) {
+                return app.settings.getSetting(SETTINGS_SECTION, key);
+            }
+        } catch (e) {}
+        return null;
+    }
+
+    function readBoolSetting(key) {
+        var value = readRawSetting(key);
+        if (value === null) return null;
+        return value === "1" || value === "true";
+    }
+
+    function readIntSetting(key) {
+        var value = readRawSetting(key);
+        if (value === null) return null;
+        var parsed = parseInt(value, 10);
+        return isNaN(parsed) ? null : parsed;
+    }
+
+    function readFloatSetting(key) {
+        var value = readRawSetting(key);
+        if (value === null) return null;
+        var parsed = parseFloat(value);
+        return isNaN(parsed) ? null : parsed;
+    }
+
+    function createProgressWindow(totalFrames, phaseLabel) {
+        try {
+            var win = new Window("palette", SCRIPT_NAME + " — " + (phaseLabel || "scanning alpha"));
             win.orientation = "column";
             win.alignChildren = ["fill", "top"];
             win.margins = 12;
             var text = win.add("statictext", undefined, "Preparing...");
             var bar = win.add("progressbar", undefined, 0, Math.max(1, totalFrames));
             bar.preferredSize.width = 360;
-            var state = {count: 0};
+            var stopButton = win.add("button", undefined, "Stop analysis");
+            var state = {count: 0, cancelled: false};
+            stopButton.onClick = function () {
+                state.cancelled = true;
+                stopButton.enabled = false;
+                text.text = "Stopping after the current frame scan...";
+                try { win.update(); } catch (stopUpdateErr) {}
+            };
             win.show();
 
             var maxFrames = Math.max(1, totalFrames);
@@ -340,6 +510,10 @@
                     if ((state.count % 4) === 0) {
                         try { win.update(); } catch (e) {}
                     }
+                },
+                isCancelled: function () {
+                    try { win.update(); } catch (e) {}
+                    return state.cancelled;
                 },
                 close: function () {
                     try { win.close(); } catch (e) {}
@@ -364,6 +538,50 @@
         text.preferredSize = [720, 420];
         var btn = dlg.add("button", undefined, "OK", {name: "ok"});
         dlg.show();
+    }
+
+    function showProjectPreviewReport(report) {
+        var dlg = new Window("dialog", SCRIPT_NAME + " — project-wide preview");
+        dlg.orientation = "column";
+        dlg.alignChildren = ["fill", "fill"];
+        dlg.margins = 12;
+
+        var summary = summarizeProjectPreview(report);
+        var message = dlg.add("statictext", undefined,
+            summary + "\r\nReview the complete Dry Run below. Apply Crops will re-analyze and process every safe entry deepest-first; Cancel leaves the project unchanged.",
+            {multiline: true});
+        message.alignment = ["fill", "top"];
+
+        var text = dlg.add("edittext", undefined, report.join("\r\n"), {multiline: true, scrolling: true});
+        text.preferredSize = [760, 460];
+
+        var buttons = dlg.add("group");
+        buttons.alignment = ["fill", "top"];
+        var applyButton = buttons.add("button", undefined, "Apply Crops", {name: "ok"});
+        applyButton.preferredSize.width = 140;
+        var spacer = buttons.add("group");
+        spacer.alignment = ["fill", "fill"];
+        var cancelButton = buttons.add("button", undefined, "Cancel", {name: "cancel"});
+        cancelButton.preferredSize.width = 120;
+
+        return dlg.show() === 1;
+    }
+
+    function summarizeProjectPreview(report) {
+        var counts = {dry: 0, tight: 0, skipped: 0, warnings: 0, errors: 0};
+        for (var i = 0; i < report.length; i++) {
+            var line = report[i];
+            if (line.indexOf("DRY  ") === 0) counts.dry++;
+            else if (line.indexOf("OK   ") === 0) counts.tight++;
+            else if (line.indexOf("SKIP ") === 0) counts.skipped++;
+            else if (line.indexOf("WARN ") === 0) counts.warnings++;
+            else if (line.indexOf("ERROR") === 0) counts.errors++;
+        }
+        return "Project summary — would crop: " + counts.dry +
+            ", already tight: " + counts.tight +
+            ", skipped: " + counts.skipped +
+            ", warnings: " + counts.warnings +
+            ", errors: " + counts.errors + ".";
     }
 
     // -------------------------------------------------------------------------
@@ -397,6 +615,15 @@
             if (seen[key]) continue;
             seen[key] = true;
             comps.push(item);
+        }
+        return comps;
+    }
+
+    function collectAllProjectComps() {
+        var comps = [];
+        for (var i = 1; i <= app.project.numItems; i++) {
+            var item = app.project.item(i);
+            if (item instanceof CompItem) comps.push(item);
         }
         return comps;
     }
@@ -803,6 +1030,11 @@
         var scanMs = new Date().getTime() - scanStart;
 
         if (!scan.ok) {
+            if (scan.cancelled) {
+                settings.runtime.cancelled = true;
+                report.push("STOP " + comp.name + ": analysis cancelled by user.");
+                return;
+            }
             report.push("SKIP " + comp.name + ": alpha scan failed: " + scan.reason);
             return;
         }
@@ -1036,6 +1268,10 @@
     // -------------------------------------------------------------------------
 
     function scanAlphaBounds(comp, settings, progress, usages) {
+        return scanAlphaBoundsFresh(comp, settings, progress, usages);
+    }
+
+    function scanAlphaBoundsFresh(comp, settings, progress, usages) {
         var analyzer = null;
         try {
             var plan = buildScanPlan(comp, settings, usages);
@@ -1048,6 +1284,9 @@
             var globalBounds = null;
 
             for (var i = 0; i < times.length; i++) {
+                if (progress && progress.isCancelled()) {
+                    return {ok: false, cancelled: true, reason: "cancelled by user"};
+                }
                 var t = times[i];
                 if (progress) {
                     progress.tick("Scanning " + comp.name + " — frame " + (i + 1) + " / " + times.length);

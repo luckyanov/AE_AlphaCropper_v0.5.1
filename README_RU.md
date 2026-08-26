@@ -2,7 +2,7 @@
 
 [English](README_EN.md) · [Русский](README_RU.md)
 
-**Текущая версия: 0.4.0**
+**Текущая версия: 0.5.0**
 
 Alpha Smart Cropper — JSX-скрипт для автоматической обрезки прекомпозиций After Effects по **фактически отрендеренному альфа-каналу**, а не по геометрическому размеру слоёв.
 
@@ -44,9 +44,13 @@ Alpha Smart Cropper — JSX-скрипт для автоматической о�
 - Компенсирует Mask Path на usage-слое.
 - Поддерживает обычный и Separated Dimensions Position.
 - Поддерживает статические и keyframed Position/Anchor Point там, где постоянное смещение математически безопасно.
-- Может опционально поместить Anchor Point полученной прекомпозиции в её центр, сохранив изображение на месте компенсацией через Position.
+- По умолчанию помещает Anchor Point полученной прекомпозиции в её центр, сохраняя изображение на месте компенсацией через Position; функцию можно отключить.
 - Есть Padding.
 - Есть `Dry Run`.
+- Есть пресеты `Current Frame / Safe Animation / Selected Branch`.
+- Последние настройки сохраняются между запусками через `app.settings`.
+- Длительный анализ можно остановить кнопкой `Stop analysis`.
+- Project-wide режим сначала анализирует все композиции и показывает сводку, а изменения применяет только после отдельного подтверждения.
 - Весь проект индексируется по usages один раз за запуск, что особенно важно при рекурсивной обработке больших проектов.
 - Внутри alpha analyzer используется кэш повторных прямоугольных `sampleImage()` запросов.
 
@@ -100,7 +104,7 @@ File → Scripts → Run Script File...
 и выбрать:
 
 ```text
-AlphaSmartCropper_v0.4.0.jsx
+AlphaSmartCropper_v0.5.0.jsx
 ```
 
 ### Постоянная установка
@@ -115,7 +119,7 @@ AlphaSmartCropper_v0.4.0.jsx
 
 1. Открыть родительскую композицию.
 2. Выделить один или несколько **precomp layers**.
-3. Запустить `AlphaSmartCropper_v0.4.0.jsx`.
+3. Запустить `AlphaSmartCropper_v0.5.0.jsx`.
 4. Выбрать режим анализа.
 5. Первый запуск на новом типе проекта лучше выполнять с `Analyze only (Dry Run)`.
 6. Проверить отчёт.
@@ -130,6 +134,20 @@ AlphaSmartCropper_v0.4.0.jsx
 Если одновременно в активной композиции выделены precomp layers, приоритет имеет выбор слоёв. Чтобы обработать именно Project-panel selection, снимите выделение с precomp layers.
 
 Режим `Used source frames — selected layers in active comp` для Project-panel selection недоступен, поскольку у такого запуска нет выбранных usage-слоёв.
+
+---
+
+# Пресеты и сохранение настроек
+
+В верхней части окна доступны пресеты:
+
+- `Current Frame` — один текущий кадр, `Frame step = 1`, статическая оптимизация включена.
+- `Safe Animation` — весь source timeline покадрово с консервативной статической оптимизацией.
+- `Selected Branch` — реально используемые кадры выделенных precomp layers с включённым Recursive Crop.
+
+`Selected Branch` доступен только при выборе precomp layers в активной композиции. Пресеты меняют параметры временного анализа, но не включают и не выключают project-wide scope. После применения пресета отдельные параметры можно изменить вручную.
+
+Последние принятые настройки сохраняются средствами `app.settings` и восстанавливаются при следующем запуске. На первой установке `Current frame only` и центрирование Anchor Point включены по умолчанию.
 
 ---
 
@@ -385,10 +403,10 @@ Expression-driven Position непосредственного ребёнка а�
 Опция:
 
 ```text
-[ ] Center resulting precomp Anchor Point (via Position)
+[x] Center resulting precomp Anchor Point (via Position)
 ```
 
-По умолчанию она выключена: стандартная компенсация через Anchor Point остаётся наиболее универсальной и поддерживает анимированные 2D-трансформации и 2D Collapse Transformations.
+В версии 0.5.0 опция включена по умолчанию, поскольку центрированный Anchor Point удобнее для дальнейшей анимации. При необходимости её можно отключить и вернуться к наиболее универсальной компенсации через Anchor Point, поддерживающей анимированные 2D-трансформации и 2D Collapse Transformations.
 
 Если опция включена, после crop каждый usage получает:
 
@@ -487,6 +505,24 @@ DRY  LIAM: 1920x1920 -> 416x465,
      scan=all usage frames,
      sampleImage=...
 ```
+
+---
+
+# Project-wide preview и остановка анализа
+
+Опция:
+
+```text
+[ ] Project-wide preview, then apply all safe crops
+```
+
+собирает все композиции проекта, сортирует их deepest-first и выполняет полный Dry Run. После этого открывается общая сводка. `Apply Crops` запускает второй анализ и применяет только безопасные операции; `Cancel` оставляет проект без crop-изменений.
+
+Второй проход намеренно анализирует композиции заново, чтобы учитывать изменения вложенных прекомпозиций и dimension-dependent expressions. Поэтому режим может быть заметно дольше обычного запуска.
+
+В окне прогресса доступна кнопка `Stop analysis`. Остановка происходит после анализа текущего кадра. Если остановлен apply-pass, уже обработанные композиции остаются изменёнными, но весь проход находится в одном Undo Group.
+
+Project-wide preview можно запустить даже без предварительно выделенных слоёв или композиций.
 
 ---
 
@@ -638,6 +674,7 @@ Auto temporal optimization: ON
 Padding: 0
 Alpha epsilon: 0
 Preserve direct children: ON
+Center resulting Anchor Point: ON
 Allow 2D Collapse Transformations: ON
 Skip Solo source comps: ON
 Skip usages with effects: OFF
@@ -679,7 +716,7 @@ Recursive Crop: ON
 
 ---
 
-# Известные ограничения 0.4.0
+# Известные ограничения 0.5.0
 
 1. **3D source comps не поддерживаются.**
 2. **Collapsed 3D usages не поддерживаются.**
@@ -698,14 +735,14 @@ Recursive Crop: ON
 
 Наиболее полезные следующие шаги:
 
-### 0.5 — Safety + instance-aware analysis
+### 0.6 — Safety + instance-aware analysis
 
 - анализ Essential Properties по каждому instance;
 - более точная классификация temporal / non-temporal Effects вместо fallback по наличию любого effect stack;
 - строгий режим для coordinate-dependent expressions;
 - отдельная диагностика `toComp/fromComp/toWorld/fromWorld` expressions.
 
-### 0.6 — Partial-static renderer
+### 0.7 — Partial-static renderer
 
 Разделение композиции на:
 
@@ -719,7 +756,7 @@ dynamic layers bounds
 
 Реализовывать это нужно только для доказуемо безопасных stacking/matte/blending случаев; иначе оптимизация будет быстрее ровно до первого отрезанного уха.
 
-### 0.7 — Precomp Optimizer
+### 0.8 — Precomp Optimizer
 
 Режим массового анализа ветки/проекта:
 
@@ -745,6 +782,16 @@ dynamic layers bounds
 ---
 
 # История версий
+
+## 0.5.0
+
+- Центрирование Anchor Point включено по умолчанию.
+- Добавлено сохранение последних настроек через `app.settings`.
+- Добавлены пресеты `Current Frame / Safe Animation / Selected Branch`.
+- Добавлена кнопка остановки длительного анализа.
+- Добавлен двухпроходный project-wide preview со сводкой и отдельным подтверждением применения.
+- Project-wide режим можно запускать без предварительного выбора crop roots.
+- JSX переименован в `AlphaSmartCropper_v0.5.0.jsx`.
 
 ## 0.4.0
 

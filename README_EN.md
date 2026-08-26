@@ -2,7 +2,7 @@
 
 [English](README_EN.md) · [Русский](README_RU.md)
 
-**Current version: 0.4.0**
+**Current version: 0.5.0**
 
 Alpha Smart Cropper is a JSX script that automatically crops After Effects precompositions to their **actually rendered alpha channel**, rather than to the geometric dimensions of their layers.
 
@@ -32,8 +32,12 @@ The script finds the first and last pixels with non-zero alpha, resizes the sour
 - Preserves direct children of every usage and remaps masks on usage layers.
 - Supports normal and Separated Dimensions Position.
 - Supports static and keyframed Position/Anchor Point wherever a constant offset is mathematically safe.
-- Can optionally center the resulting precomp Anchor Point while preserving the image through Position compensation.
+- Centers the resulting precomp Anchor Point by default while preserving the image through Position compensation; the option can be disabled.
 - Includes Padding and Dry Run modes.
+- Includes `Current Frame / Safe Animation / Selected Branch` presets.
+- Persists the last-used settings between runs through `app.settings`.
+- Long scans can be interrupted with `Stop analysis`.
+- Project-wide mode previews every composition and requires a separate confirmation before applying changes.
 - Builds the project-wide usage index once per run.
 - Caches repeated rectangular `sampleImage()` queries inside the alpha analyzer.
 
@@ -85,12 +89,12 @@ File → Scripts → Run Script File...
 and select:
 
 ```text
-AlphaSmartCropper_v0.4.0.jsx
+AlphaSmartCropper_v0.5.0.jsx
 ```
 
 ### Permanent installation
 
-Copy the JSX file into the `Scripts` directory of your installed After Effects version, then restart After Effects. A ScriptUI Panel installation is not required: version 0.4.0 opens its own dialog.
+Copy the JSX file into the `Scripts` directory of your installed After Effects version, then restart After Effects. A ScriptUI Panel installation is not required: version 0.5.0 opens its own dialog.
 
 ---
 
@@ -98,7 +102,7 @@ Copy the JSX file into the `Scripts` directory of your installed After Effects v
 
 1. Open a parent composition.
 2. Select one or more **precomp layers**.
-3. Run `AlphaSmartCropper_v0.4.0.jsx`.
+3. Run `AlphaSmartCropper_v0.5.0.jsx`.
 4. Select the time-analysis mode.
 5. For a new project type, first run with `Analyze only (Dry Run)` enabled.
 6. Review the report.
@@ -113,6 +117,20 @@ Instead of selecting a precomp layer, select one or more compositions directly i
 If precomp layers are also selected in an active composition, the layer selection takes priority. Deselect those precomp layers to process the Project-panel selection instead.
 
 `Used source frames — selected layers in active comp` is unavailable for a Project-panel selection because that workflow has no selected usage layers.
+
+---
+
+# Presets and persistent settings
+
+The dialog provides three presets:
+
+- `Current Frame` — one current frame, `Frame step = 1`, static optimization enabled.
+- `Safe Animation` — the entire source timeline frame-by-frame with conservative static optimization.
+- `Selected Branch` — source frames used by the selected precomp layers, with Recursive Crop enabled.
+
+`Selected Branch` is available only when precomp layers are selected in an active composition. Presets change time-analysis controls but do not toggle project-wide scope. Individual controls may still be adjusted after choosing a preset.
+
+Accepted settings are stored through `app.settings` and restored on the next run. On a fresh installation, `Current frame only` and centered Anchor Point are enabled by default.
 
 ---
 
@@ -242,10 +260,10 @@ Changing a parent precomp's Anchor Point also affects its direct children. The s
 # Centering Anchor Point through Position
 
 ```text
-[ ] Center resulting precomp Anchor Point (via Position)
+[x] Center resulting precomp Anchor Point (via Position)
 ```
 
-This option is disabled by default because the standard Anchor Point compensation is more general and supports animated 2D transforms and 2D Collapse Transformations.
+Version 0.5.0 enables this option by default because a centered Anchor Point is more convenient for later animation. Disable it when you need the most general compensation path, including animated 2D transforms and 2D Collapse Transformations.
 
 When enabled, each resulting usage receives:
 
@@ -296,6 +314,22 @@ The optional centered-anchor mode also excludes Collapse Transformations usages 
 ```
 
 Dry Run performs the full scan and safety analysis but does not resize compositions or change properties. Its report includes old/new dimensions, saved area, alpha bounds, frames scanned, scan mode, `sampleImage()` calls, cache hits, warnings, and skip reasons.
+
+---
+
+# Project-wide preview and stopping analysis
+
+```text
+[ ] Project-wide preview, then apply all safe crops
+```
+
+collects every composition in the project, orders them deepest-first, and performs a complete Dry Run. A combined summary is then shown. `Apply Crops` starts a second analysis and applies safe operations; `Cancel` leaves the project without crop changes.
+
+The apply pass deliberately scans again so changes to nested comps and dimension-dependent expressions are reflected. This makes project-wide mode slower but safer than reusing stale bounds.
+
+The progress window includes `Stop analysis`. Cancellation takes effect after the current frame scan. If the apply pass is stopped, already processed compositions remain changed, but the whole pass is contained in one Undo Group.
+
+Project-wide preview can be started without preselecting layers or compositions.
 
 ---
 
@@ -380,7 +414,7 @@ Scan: Current frame only for a static frame;
 Frame step: 1
 Auto static optimization: ON
 Preserve direct children: ON
-Center resulting Anchor Point: OFF (enable only when desired)
+Center resulting Anchor Point: ON
 Allow 2D Collapse Transformations: ON
 Skip Solo: ON
 Skip Essential Properties: ON
@@ -419,7 +453,7 @@ Keep a saved `.aep` version before the first large batch. Undo is useful, but a 
 
 ---
 
-# Known limitations in 0.4.0
+# Known limitations in 0.5.0
 
 1. 3D source comps are not supported.
 2. Collapsed 3D usages are not supported.
@@ -436,18 +470,18 @@ Keep a saved `.aep` version before the first large batch. Undo is useful, but a 
 
 # Roadmap
 
-### 0.5 — Safety and instance-aware analysis
+### 0.6 — Safety and instance-aware analysis
 
 - per-instance Essential Properties analysis;
 - finer temporal/non-temporal effect classification;
 - strict handling of coordinate-dependent expressions;
 - dedicated diagnostics for `toComp/fromComp/toWorld/fromWorld` expressions.
 
-### 0.6 — Partial-static renderer
+### 0.7 — Partial-static renderer
 
 Separate provably safe static base bounds from dynamic-layer bounds, reducing repeated analysis of large static PSD content.
 
-### 0.7 — Precomp Optimizer
+### 0.8 — Precomp Optimizer
 
 Project/branch batch analysis with a summary such as:
 
@@ -471,6 +505,16 @@ Project/branch batch analysis with a summary such as:
 ---
 
 # Version history
+
+## 0.5.0
+
+- Enabled Anchor Point centering by default.
+- Added last-used setting persistence through `app.settings`.
+- Added `Current Frame / Safe Animation / Selected Branch` presets.
+- Added a Stop button for long analyses.
+- Added a two-pass project-wide preview with a combined summary and explicit apply confirmation.
+- Allowed project-wide mode to run without preselected crop roots.
+- Renamed the script to `AlphaSmartCropper_v0.5.0.jsx`.
 
 ## 0.4.0
 
