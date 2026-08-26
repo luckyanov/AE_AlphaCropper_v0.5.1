@@ -11,6 +11,9 @@
  * Main differences from geometry/sourceRectAtTime croppers:
  *   - analyzes the FINAL rendered alpha of the source precomp;
  *   - transparent pixels do not count, so full-canvas Photoshop layers are handled;
+ *   - treats Layer Opacity as 100% for bounds without modifying its keyframes;
+ *   - auto-expands Current Frame to the full timeline when animation can change
+ *     visible bounds, then unions every sampled frame;
  *   - can scan every frame of the whole comp or work area;
  *   - preserves every usage of the cropped precomp across the project;
  *   - preserves direct children of those usages by compensating their Position;
@@ -308,7 +311,7 @@
             "Used source frames — all project usages",
             "Used source frames — selected layers in active comp",
             "Work area — every frame",
-            "Current frame only"
+            "Current frame — auto-expand animated bounds"
         ]);
         var initialScanMode = saved.scanMode !== null ? saved.scanMode : 4;
         if (selectionMode !== "layers" && initialScanMode === 2) initialScanMode = 4;
@@ -1351,11 +1354,17 @@
 
     function scanAlphaBoundsFresh(comp, settings, progress, usages) {
         var analyzer = null;
+        var opacityOverrides = [];
         try {
             var plan = buildScanPlan(comp, settings, usages);
             var times = plan.times;
             if (times.length === 0) {
                 return {ok: false, reason: "no frame times to scan"};
+            }
+
+            opacityOverrides = forceLayerOpacityForBounds(comp);
+            if (opacityOverrides.length > 0) {
+                plan.notes.push("INFO Layer Opacity was treated as 100% for bounds analysis (" + opacityOverrides.length + " overridden layer(s)) for");
             }
 
             analyzer = createAlphaAnalyzer(comp, settings.alphaEpsilon);
@@ -1415,6 +1424,92 @@
             return {ok: false, reason: errorToString(err)};
         } finally {
             if (analyzer) analyzer.dispose();
+            restoreLayerOpacityAfterBounds(opacityOverrides);
+        }
+    }
+
+    function forceLayerOpacityForBounds(rootComp) {
+        var states = [];
+        var visited = {};
+
+        function visit(comp) {
+            var compKey = String(comp.id);
+            if (visited[compKey]) return;
+            visited[compKey] = true;
+
+            for (var i = 1; i <= comp.numLayers; i++) {
+                var layer = comp.layer(i);
+                var opacity = getTransformProperty(layer, "ADBE Opacity");
+
+                if (opacity) {
+                    var needsOverride = false;
+                    try {
+                        needsOverride = !!opacity.expressionEnabled || (opacity.numKeys || 0) > 0 || Math.abs(opacity.value - 100) > 0.0000001;
+                    } catch (inspectOpacityErr) {
+                        needsOverride = true;
+                    }
+
+                    if (needsOverride) {
+                        var canSet = false;
+                        try { canSet = !!opacity.canSetExpression; } catch (canSetErr) {}
+                        if (!canSet) {
+                            throw new Error("Layer Opacity cannot be overridden safely for bounds analysis: " + comp.name + " / " + layer.name);
+                        }
+
+                        var state = {
+                            layer: layer,
+                            prop: opacity,
+                            expression: "",
+                            expressionEnabled: false,
+                            wasLocked: false
+                        };
+                        try { state.expression = opacity.expression || ""; } catch (readExpressionErr) {}
+                        try { state.expressionEnabled = !!opacity.expressionEnabled; } catch (readEnabledErr) {}
+                        try { state.wasLocked = !!layer.locked; } catch (readLockErr) {}
+                        states.push(state);
+
+                        try {
+                            if (state.wasLocked) layer.locked = false;
+                            opacity.expression = "100";
+                            opacity.expressionEnabled = true;
+                        } finally {
+                            try { if (state.wasLocked) layer.locked = true; } catch (restoreLockErr) {}
+                        }
+                    }
+                }
+
+                var source = null;
+                try { source = layer.source; } catch (sourceErr) {}
+                if (source && (source instanceof CompItem)) visit(source);
+            }
+        }
+
+        try {
+            visit(rootComp);
+            return states;
+        } catch (err) {
+            restoreLayerOpacityAfterBounds(states);
+            throw err;
+        }
+    }
+
+    function restoreLayerOpacityAfterBounds(states) {
+        if (!states) return;
+        var firstError = null;
+        for (var i = states.length - 1; i >= 0; i--) {
+            var state = states[i];
+            try {
+                if (state.wasLocked) state.layer.locked = false;
+                state.prop.expression = state.expression;
+                state.prop.expressionEnabled = state.expressionEnabled;
+            } catch (restoreErr) {
+                if (!firstError) firstError = restoreErr;
+            } finally {
+                try { if (state.wasLocked) state.layer.locked = true; } catch (restoreLockErr) {}
+            }
+        }
+        if (firstError) {
+            throw new Error("Could not restore Layer Opacity after bounds analysis: " + errorToString(firstError));
         }
     }
 
@@ -1663,15 +1758,42 @@
             if (recursiveTimes && recursiveTimes.length > 0) {
                 var recursiveNotes = settings.runtime.recursiveSelectedNotes[String(comp.id)] || [];
                 for (var rn = 0; rn < recursiveNotes.length; rn++) notes.push(recursiveNotes[rn]);
-                return {
-                    times: recursiveTimes.slice(0),
-                    label: settings.runtime.recursiveTimeLabel || "recursive branch",
-                    notes: notes
-                };
+
+                var useRecursiveTimes = true;
+                if (settings.scanMode === 4) {
+                    var recursiveMemo = (settings.runtime && settings.runtime.staticMemo) ? settings.runtime.staticMemo : {};
+                    var recursiveTemporal = analyzeCompTemporalClass(comp, recursiveMemo, {});
+                    if (recursiveTemporal.mode !== "static") {
+                        useRecursiveTimes = false;
+                        notes.push("INFO recursive current-time constraint was expanded for animated bounds safety because " + recursiveTemporal.reason + " for");
+                    }
+                }
+
+                if (useRecursiveTimes) {
+                    return {
+                        times: recursiveTimes.slice(0),
+                        label: settings.runtime.recursiveTimeLabel || "recursive branch",
+                        notes: notes
+                    };
+                }
             }
         }
 
         if (settings.scanMode === 4) {
+            // Current Frame remains fast for static/opacity-only animation, but
+            // automatically expands to the full timeline when any other visual
+            // animation could move or reshape non-zero pixels. This prevents the
+            // default mode from clipping animated transform extremes.
+            var currentMemo = (settings.runtime && settings.runtime.staticMemo) ? settings.runtime.staticMemo : {};
+            var currentTemporal = analyzeCompTemporalClass(comp, currentMemo, {});
+            if (currentTemporal.mode !== "static") {
+                notes.push("INFO Current Frame auto-expanded to the entire source timeline because " + currentTemporal.reason + " for");
+                return {
+                    times: getTimelineTimes(comp, 0, comp.duration, 1),
+                    label: "current frame auto-expanded (animated bounds safety)",
+                    notes: notes
+                };
+            }
             return {
                 times: [clamp(comp.time, 0, maxRenderableTime(comp))],
                 label: "current frame",
@@ -2101,7 +2223,8 @@
             // Markers, audio and motion-tracker metadata do not affect alpha.
             if (matchName === "ADBE Marker" ||
                 matchName === "ADBE Audio Group" ||
-                matchName === "ADBE MTrackers") {
+                matchName === "ADBE MTrackers" ||
+                matchName === "ADBE Opacity") {
                 continue;
             }
 
@@ -2129,7 +2252,8 @@
                 if (temporal.mode === "static") {
                     n += 1;
                 } else if (settings.scanMode === 4) {
-                    n += 1;
+                    var autoExpandedTimes = getTimelineTimes(comps[i], 0, comps[i].duration, 1);
+                    n += temporal.mode === "visibility" ? reduceTimesByVisibilityState(comps[i], autoExpandedTimes).length : autoExpandedTimes.length;
                 } else if (settings.scanMode === 3) {
                     var workTimes = getTimelineTimes(
                         comps[i],

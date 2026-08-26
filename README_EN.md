@@ -19,6 +19,8 @@ The script finds the first and last pixels with non-zero alpha, resizes the sour
 - Crops precompositions using their **real rendered alpha**.
 - Treats `alpha = 0` pixels as empty regardless of the original PSD, PNG, or footage-layer dimensions.
 - Can analyze every frame of an animation.
+- Treats Layer Opacity as 100% for bounds analysis without deleting or changing the original keys or expressions.
+- Automatically expands the default Current Frame scan to the full timeline when animation can change geometric bounds.
 - Can analyze only source times actually requested by precomp instances.
 - Accounts for In Point, Out Point, Start Time, positive or negative Stretch, Time Remap, and Frame Blending neighbor samples.
 - Automatically reduces the scan to one frame when a composition can be conservatively proven static.
@@ -130,7 +132,7 @@ If precomp layers are also selected in an active composition, the layer selectio
 
 The dialog provides three presets:
 
-- `Current Frame` — one current frame, `Frame step = 1`, static optimization enabled.
+- `Current Frame` — one frame for static or opacity-only content; automatically scans the whole timeline at step 1 when animation can change geometric bounds.
 - `Safe Animation` — the entire source timeline frame-by-frame with conservative static optimization.
 - `Selected Branch` — source frames used by the selected precomp layers, with Recursive Crop enabled.
 
@@ -142,7 +144,7 @@ Accepted settings are stored through `app.settings` and restored on the next run
 
 # Time-analysis modes
 
-`Current frame only` is the default. This keeps the common run fast and predictable; explicitly choose a full-range or used-source-frame mode for animated content.
+`Current Frame` is the default. It scans one frame for static or opacity-only content. If Position, Scale, Rotation, Shape/Text properties, In/Out, or other visually significant animation can change bounds, it automatically expands to the full source timeline at `Frame step = 1` and unions the maximum non-zero pixels.
 
 ## 1. Entire source composition — every frame
 
@@ -173,7 +175,9 @@ Scans the Work Area of the source composition. This is useful for manually limit
 
 ## 5. Current frame only
 
-Scans only the current source frame. Use this only for a known static frame or an intentional one-frame crop. Animated pixels appearing later may be cut off.
+For static content, only the current source frame is scanned. If conservative temporal analysis detects animation that can change visible bounds, the script automatically scans the complete timeline frame-by-frame. Animated Position, Scale, Rotation, and other visual properties are therefore included in the maximum union bounds instead of being cropped from a single frame.
+
+Layer Opacity is excluded from temporal classification and is evaluated as `100%` during the alpha scan. Original keys and expressions remain intact: the script temporarily applies an expression of `100` to Layer Opacity throughout the nested branch and restores the previous state after analysis.
 
 ---
 
@@ -471,6 +475,7 @@ Keep a saved `.aep` version before the first large batch. Undo is useful, but a 
 8. Selected-usage mode can intentionally ignore data used by other instances.
 9. Unusual `displayStartTime` and complex subframe temporal effects require further AE testing.
 10. Position-based centered-anchor compensation is intentionally limited to safe 2D usages with static Scale/Rotation and no Collapse Transformations.
+11. The `Opacity = 100%` rule applies to Layer Transform Opacity. Mask Opacity, Shape Fill/Stroke Opacity, and effects that modify alpha remain part of the final rendered result.
 
 ---
 
@@ -522,6 +527,8 @@ Project/branch batch analysis with a summary such as:
 - Allowed project-wide mode to run without preselected crop roots.
 - Renamed the script to `AlphaSmartCropper_v0.5.0.jsx`.
 - Added a persistent launcher palette for repeated runs with a new selection; it closes through the title-bar X or `Close` button.
+- Excluded Layer Opacity from bounds by safely overriding it to 100% during analysis and restoring it afterward.
+- Made Current Frame automatically expand to a full frame-by-frame scan for geometrically significant animation.
 
 ## 0.4.0
 
