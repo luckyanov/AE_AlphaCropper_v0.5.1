@@ -2,9 +2,9 @@
 #targetengine "AlphaSmartCropperEngine"
 
 /**
- * AlphaSmartCropper_v0.5.0.jsx
+ * AlphaSmartCropper_v0.5.1.jsx
  * by Stray Token / Luckyanov D.S.
- * Version 0.5.0
+ * Version 0.5.1
  *
  * Alpha-aware precomp cropper for Adobe After Effects.
  *
@@ -51,18 +51,20 @@
  *   - expressions/effects that explicitly depend on comp/layer width/height can
  *     still change after a crop; warnings are included in the report;
  *   - Essential Properties can make different usages render differently; by
- *     default such usages are skipped because a source-only alpha scan cannot
- *     safely represent per-instance overrides.
+ *     default nested/non-selected sources are skipped because a source-only
+ *     alpha scan cannot represent per-instance overrides. An explicitly selected
+ *     Project-panel root proceeds with a prominent warning.
  *
  * Alpha detection uses an expression helper with sampleImage(). The helper comp is
  * temporary and is removed immediately after analysis.
  */
 
 (function AlphaSmartCropper(thisObj) {
-    var VERSION = "0.5.0";
+    var VERSION = "0.5.1";
     var SCRIPT_NAME = "Alpha Smart Cropper";
     var SETTINGS_SECTION = "AlphaSmartCropper_0_5";
     var MAIN_WINDOW_GLOBAL_KEY = "__AlphaSmartCropperMainWindow__";
+    var PROGRESS_WINDOW_GLOBAL_KEY = "__AlphaSmartCropperProgressWindow__";
 
     function runCropWorkflow(settings) {
         if (!app.project) {
@@ -89,6 +91,10 @@
             return;
         }
         settings.selectionMode = selectionMode;
+        settings.selectedRootMap = {};
+        for (var selectedRootIndex = 0; selectedRootIndex < selectedPrecomps.length; selectedRootIndex++) {
+            settings.selectedRootMap[String(selectedPrecomps[selectedRootIndex].id)] = true;
+        }
 
         // Keep actual layer references. This is more reliable than names and also
         // lets the "selected usages" scan mode distinguish multiple instances
@@ -194,8 +200,11 @@
         } catch (err) {
             report.push("ERROR: " + errorToString(err));
         } finally {
-            app.endUndoGroup();
-            if (progress) progress.close();
+            try {
+                app.endUndoGroup();
+            } finally {
+                if (progress) progress.close();
+            }
         }
     }
 
@@ -324,7 +333,7 @@
 
         var skipEssentialCheck = safePanel.add("checkbox", undefined, "Skip usages with Essential Properties (recommended)");
         skipEssentialCheck.value = saved.skipEssentialProperties !== null ? saved.skipEssentialProperties : true;
-        skipEssentialCheck.helpTip = "Essential Properties can override source values per precomp instance, so one source-only alpha scan may not describe every usage. Disable only if you know the exposed properties cannot affect alpha/bounds.";
+        skipEssentialCheck.helpTip = "Essential Properties can override source values per precomp instance, so one source-only alpha scan may not describe every usage. Nested and non-selected sources are skipped. A composition explicitly selected as a Project-panel root proceeds with a warning.";
 
         var recursiveCheck = safePanel.add("checkbox", undefined, "Recursively crop nested precomps first");
         recursiveCheck.value = saved.recursiveCrop !== null ? saved.recursiveCrop : (selectionMode === "project");
@@ -540,8 +549,19 @@
     }
 
     function createProgressWindow(totalFrames, phaseLabel) {
+        var win = null;
         try {
-            var win = new Window("palette", SCRIPT_NAME + " — " + (phaseLabel || "scanning alpha"));
+            try {
+                var staleProgress = $.global[PROGRESS_WINDOW_GLOBAL_KEY];
+                if (staleProgress) {
+                    try { staleProgress.hide(); } catch (staleHideErr) {}
+                    try { staleProgress.onClose = null; } catch (staleOnCloseErr) {}
+                    try { staleProgress.close(); } catch (staleCloseErr) {}
+                }
+                $.global[PROGRESS_WINDOW_GLOBAL_KEY] = null;
+            } catch (staleProgressErr) {}
+
+            win = new Window("palette", SCRIPT_NAME + " — " + (phaseLabel || "scanning alpha"));
             win.orientation = "column";
             win.alignChildren = ["fill", "top"];
             win.margins = 12;
@@ -549,14 +569,19 @@
             var bar = win.add("progressbar", undefined, 0, Math.max(1, totalFrames));
             bar.preferredSize.width = 360;
             var stopButton = win.add("button", undefined, "Stop analysis");
-            var state = {count: 0, cancelled: false};
+            var state = {count: 0, cancelled: false, finishing: false};
             stopButton.onClick = function () {
                 state.cancelled = true;
                 stopButton.enabled = false;
-                text.text = "Stopping after the current frame scan...";
+                text.text = "Stopping…";
                 try { win.update(); } catch (stopUpdateErr) {}
             };
+            win.onClose = function () {
+                if (!state.finishing) state.cancelled = true;
+                return state.finishing;
+            };
             win.show();
+            try { $.global[PROGRESS_WINDOW_GLOBAL_KEY] = win; } catch (storeProgressErr) {}
 
             var maxFrames = Math.max(1, totalFrames);
             return {
@@ -568,19 +593,27 @@
                     state.count++;
                     if (state.count <= maxFrames) bar.value = state.count;
                     if (s) text.text = s;
-                    if ((state.count % 4) === 0) {
-                        try { win.update(); } catch (e) {}
-                    }
+                    try { win.update(); } catch (e) {}
+                    try { $.sleep(1); } catch (sleepErr) {}
                 },
                 isCancelled: function () {
                     try { win.update(); } catch (e) {}
+                    try { $.sleep(1); } catch (sleepErr) {}
                     return state.cancelled;
                 },
                 close: function () {
-                    try { win.close(); } catch (e) {}
+                    state.finishing = true;
+                    try { win.hide(); } catch (hideErr) {}
+                    try { win.close(); } catch (closeErr) {}
+                    try { $.global[PROGRESS_WINDOW_GLOBAL_KEY] = null; } catch (clearProgressErr) {}
                 }
             };
         } catch (err) {
+            if (win) {
+                try { win.hide(); } catch (failedHideErr) {}
+                try { win.close(); } catch (failedCloseErr) {}
+            }
+            try { $.global[PROGRESS_WINDOW_GLOBAL_KEY] = null; } catch (failedClearErr) {}
             return null;
         }
     }
@@ -996,12 +1029,18 @@
 
                 if (hasEssentialProperties(layer)) {
                     if (settings.skipEssentialProperties) {
-                        return {
-                            ok: false,
-                            reason: "usage has Essential Properties; per-instance overrides can change rendered bounds: " + item.name + " / " + layer.name
-                        };
+                        var explicitlySelectedProjectRoot = settings.selectionMode === "project" &&
+                            settings.selectedRootMap && settings.selectedRootMap[String(sourceComp.id)];
+                        if (!explicitlySelectedProjectRoot) {
+                            return {
+                                ok: false,
+                                reason: "usage has Essential Properties; per-instance overrides can change rendered bounds: " + item.name + " / " + layer.name
+                            };
+                        }
+                        report.push("WARN " + sourceComp.name + ": explicitly selected Project-panel root has a usage with Essential Properties; cropping the selected source as requested, but per-instance override bounds cannot be guaranteed: " + item.name + " / " + layer.name);
+                    } else {
+                        report.push("WARN " + sourceComp.name + ": usage has Essential Properties; source-only alpha analysis cannot guarantee per-instance overridden bounds: " + item.name + " / " + layer.name);
                     }
-                    report.push("WARN " + sourceComp.name + ": usage has Essential Properties; source-only alpha analysis cannot guarantee per-instance overridden bounds: " + item.name + " / " + layer.name);
                 }
 
                 if (settings.strictUsageEffects && hasEffects(layer)) {
@@ -1345,7 +1384,7 @@
                 plan.notes.push("INFO Layer Opacity was treated as 100% for bounds analysis (" + opacityOverrides.length + " overridden layer(s)) for");
             }
 
-            analyzer = createAlphaAnalyzer(comp, settings.alphaEpsilon);
+            analyzer = createAlphaAnalyzer(comp, settings.alphaEpsilon, progress);
             var globalBounds = null;
 
             for (var i = 0; i < times.length; i++) {
@@ -1399,6 +1438,11 @@
                 sampleCacheHits: analyzer.getStats().cacheHits
             };
         } catch (err) {
+            try {
+                if (err && err.ascCancelled) {
+                    return {ok: false, cancelled: true, reason: "cancelled by user"};
+                }
+            } catch (cancelInspectErr) {}
             return {ok: false, reason: errorToString(err)};
         } finally {
             if (analyzer) analyzer.dispose();
@@ -1491,7 +1535,7 @@
         }
     }
 
-    function createAlphaAnalyzer(sourceComp, alphaEpsilon) {
+    function createAlphaAnalyzer(sourceComp, alphaEpsilon, progress) {
         var project = app.project;
         var tmpName = "__AlphaSmartCropper_TMP__" + sourceComp.id + "_" + (new Date().getTime());
         var tmpComp = project.items.addComp(
@@ -1560,8 +1604,17 @@
             var sampleCalls = 0;
             var cacheHits = 0;
 
+            function stopIfRequested() {
+                if (progress && progress.isCancelled()) {
+                    var cancelError = new Error("cancelled by user");
+                    cancelError.ascCancelled = true;
+                    throw cancelError;
+                }
+            }
+
             return {
                 hasAlphaRect: function (time, x0, y0, x1, y1) {
+                    stopIfRequested();
                     if (x1 <= x0 || y1 <= y0) return false;
 
                     var cacheKey = String(Math.round(time * 1000000)) + ":" +
@@ -1580,6 +1633,7 @@
 
                     var avgAlpha = alphaProp.valueAtTime(time, false);
                     sampleCalls++;
+                    stopIfRequested();
                     if (typeof avgAlpha !== "number" || isNaN(avgAlpha)) {
                         throw new Error("invalid alpha sample at time " + time);
                     }

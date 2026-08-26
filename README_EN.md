@@ -2,7 +2,7 @@
 
 [English](README_EN.md) · [Русский](README_RU.md)
 
-**Current version: 0.5.0**
+**Current version: 0.5.1**
 
 Alpha Smart Cropper is a JSX script that automatically crops After Effects precompositions to their **actually rendered alpha channel**, rather than to the geometric dimensions of their layers.
 
@@ -94,7 +94,7 @@ File → Scripts → Run Script File...
 and select:
 
 ```text
-AlphaSmartCropper_v0.5.0.jsx
+AlphaSmartCropper_v0.5.1.jsx
 ```
 
 ### Permanent installation
@@ -105,13 +105,13 @@ Copy the JSX into the installed After Effects `Scripts` directory without a vers
 C:\Program Files\Adobe\Adobe After Effects 2025\Support Files\Scripts\AlphaSmartCropper.jsx
 ```
 
-then restart After Effects. A ScriptUI Panel installation is not required: version 0.5.0 opens a persistent modeless settings palette.
+then restart After Effects. A ScriptUI Panel installation is not required: version 0.5.1 opens a persistent modeless settings palette.
 
 ---
 
 ## Basic usage
 
-1. Run `AlphaSmartCropper_v0.5.0.jsx` or the installed `AlphaSmartCropper.jsx`.
+1. Run `AlphaSmartCropper_v0.5.1.jsx` or the installed `AlphaSmartCropper.jsx`.
 2. Select one or more **precomp layers**, or compositions in the Project panel.
 3. Choose the analysis settings and click `Crop`.
 4. After reviewing the report, change the selection or settings and click `Crop` again.
@@ -366,6 +366,8 @@ Essential Properties may cause instances of the same source comp to render diffe
 [x] Skip usages with Essential Properties (recommended)
 ```
 
+Version 0.5.1 makes one deliberate exception: a composition explicitly selected as a root in the Project panel is cropped as requested and reports a prominent warning about any external Essential Properties usage. Nested and non-selected source compositions remain protected by the normal skip.
+
 ## Effects
 
 Effects on a usage may contain layer-space controls. The normal mode reports a warning. Enable `Skip usages with effects (strict safety)` when those controls must never be left unremapped. Effects that may change temporal sampling trigger a conservative full-timeline fallback in used-frame modes.
@@ -464,7 +466,7 @@ Keep a saved `.aep` version before the first large batch. Undo is useful, but a 
 
 ---
 
-# Known limitations in 0.5.0
+# Known limitations in 0.5.1
 
 1. 3D source comps are not supported.
 2. Collapsed 3D usages are not supported.
@@ -517,6 +519,14 @@ Project/branch batch analysis with a summary such as:
 ---
 
 # Version history
+
+## 0.5.1
+
+- Made the progress palette hide and close reliably before the completion report appears.
+- Increased Stop responsiveness by pumping ScriptUI events between individual alpha samples, including during a single-frame scan.
+- Explicitly selected Project-panel roots now proceed with a warning when an external usage has Essential Properties; nested and non-selected sources retain strict skipping.
+- Kept the complete modeless settings window open after Crop and replaced the close action with `Exit`.
+- Fixed missing Layer Transform Skew being treated as animated Skew and made unsafe optional anchor centering fall back per usage.
 
 ## 0.5.0
 

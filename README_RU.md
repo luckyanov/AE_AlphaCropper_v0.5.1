@@ -2,7 +2,7 @@
 
 [English](README_EN.md) · [Русский](README_RU.md)
 
-**Текущая версия: 0.5.0**
+**Текущая версия: 0.5.1**
 
 Alpha Smart Cropper — JSX-скрипт для автоматической обрезки прекомпозиций After Effects по **фактически отрендеренному альфа-каналу**, а не по геометрическому размеру слоёв.
 
@@ -109,7 +109,7 @@ File → Scripts → Run Script File...
 и выбрать:
 
 ```text
-AlphaSmartCropper_v0.5.0.jsx
+AlphaSmartCropper_v0.5.1.jsx
 ```
 
 ### Постоянная установка
@@ -128,7 +128,7 @@ C:\Program Files\Adobe\Adobe After Effects 2025\Support Files\Scripts\AlphaSmart
 
 ## Базовое использование
 
-1. Запустить `AlphaSmartCropper_v0.5.0.jsx` или установленный `AlphaSmartCropper.jsx`.
+1. Запустить `AlphaSmartCropper_v0.5.1.jsx` или установленный `AlphaSmartCropper.jsx`.
 2. Выделить один или несколько **precomp layers** либо композиции в Project panel.
 3. Выбрать режим анализа и нажать `Crop`.
 4. После отчёта изменить выделение или настройки и снова нажать `Crop`.
@@ -560,6 +560,8 @@ Project-wide preview можно запустить даже без предва�
 [x] Skip usages with Essential Properties (recommended)
 ```
 
+В версии 0.5.1 сделано одно осознанное исключение: композиция, явно выбранная как root в Project panel, обрезается по запросу и выводит заметное предупреждение о внешнем usage с Essential Properties. Для вложенных и невыбранных source compositions сохраняется обычный защитный SKIP.
+
 Причина принципиальная.
 
 Одна source comp может иметь несколько instances:
@@ -723,7 +725,7 @@ Recursive Crop: ON
 
 ---
 
-# Известные ограничения 0.5.0
+# Известные ограничения 0.5.1
 
 1. **3D source comps не поддерживаются.**
 2. **Collapsed 3D usages не поддерживаются.**
@@ -790,6 +792,14 @@ dynamic layers bounds
 ---
 
 # История версий
+
+## 0.5.1
+
+- Окно прогресса теперь принудительно скрывается и надёжно закрывается до показа итогового отчёта.
+- `Stop analysis` обрабатывается между отдельными alpha samples, в том числе внутри анализа одного кадра.
+- Явно выбранная в Project panel корневая композиция обрезается с предупреждением, даже если внешний usage содержит Essential Properties; для вложенных и невыбранных source comps строгий SKIP сохраняется.
+- Полное modeless-окно настроек остаётся открытым после Crop, а явная кнопка закрытия называется `Exit`.
+- Исправлена трактовка отсутствующего Layer Transform Skew как анимированного и добавлен per-usage fallback для небезопасного центрирования Anchor Point.
 
 ## 0.5.0
 
