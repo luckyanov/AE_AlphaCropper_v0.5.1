@@ -1,5 +1,6 @@
 /**
  * AlphaSmartCropper_v0.5.0.jsx
+ * by Stray Token / Luckyanov D.S.
  * Version 0.5.0
  *
  * Alpha-aware precomp cropper for Adobe After Effects.
