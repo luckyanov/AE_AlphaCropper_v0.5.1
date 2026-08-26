@@ -33,8 +33,8 @@
  *   - persists settings and provides Current Frame, Safe Animation and Selected
  *     Branch presets;
  *   - supports cancellable project-wide preview followed by explicit apply;
- *   - stays available in a persistent modeless launcher for repeated runs with
- *     different layer or Project-panel selections;
+ *   - keeps the full settings window open for repeated runs with different
+ *     layer or Project-panel selections; only Exit closes the script UI;
  *   - can propagate the selected parent usage time range down a recursive
  *     precomp branch instead of scanning unrelated nested-comp time;
  *   - builds a project-wide usage index once per run instead of rescanning the
@@ -62,106 +62,18 @@
     var VERSION = "0.5.0";
     var SCRIPT_NAME = "Alpha Smart Cropper";
     var SETTINGS_SECTION = "AlphaSmartCropper_0_5";
-    var LAUNCHER_GLOBAL_KEY = "__AlphaSmartCropperLauncher__";
+    var MAIN_WINDOW_GLOBAL_KEY = "__AlphaSmartCropperMainWindow__";
 
-    function showLauncher() {
-        try {
-            var existing = $.global[LAUNCHER_GLOBAL_KEY];
-            if (existing) {
-                existing.show();
-                try { existing.active = true; } catch (activateErr) {}
-                return;
-            }
-        } catch (existingErr) {}
-
-        var win = new Window("palette", SCRIPT_NAME + " " + VERSION);
-        win.orientation = "column";
-        win.alignChildren = ["fill", "top"];
-        win.spacing = 10;
-        win.margins = 14;
-
-        var intro = win.add("statictext", undefined,
-            "Select precomp layers or Project-panel compositions, then run Crop. The launcher stays open so you can change the selection and run again.",
-            {multiline: true});
-        intro.preferredSize.width = 430;
-
-        var status = win.add("statictext", undefined, "Ready.");
-        status.alignment = ["fill", "top"];
-
-        var buttons = win.add("group");
-        buttons.alignment = ["fill", "top"];
-        buttons.alignChildren = ["fill", "center"];
-
-        var cropButton = buttons.add("button", undefined, "Crop...", {name: "ok"});
-        cropButton.preferredSize.width = 140;
-        var spacer = buttons.add("group");
-        spacer.alignment = ["fill", "fill"];
-        var closeButton = buttons.add("button", undefined, "Close", {name: "cancel"});
-        closeButton.preferredSize.width = 110;
-
-        var running = false;
-        cropButton.onClick = function () {
-            if (running) return;
-            running = true;
-            cropButton.enabled = false;
-            closeButton.enabled = false;
-            status.text = "Running...";
-            try { win.update(); } catch (beforeRunUpdateErr) {}
-
-            try {
-                runCropWorkflow();
-                status.text = "Ready — change the selection and run again.";
-            } catch (err) {
-                status.text = "Ready after an error.";
-                alert(SCRIPT_NAME + ": " + errorToString(err));
-            } finally {
-                running = false;
-                cropButton.enabled = true;
-                closeButton.enabled = true;
-                try { win.update(); } catch (afterRunUpdateErr) {}
-            }
-        };
-
-        closeButton.onClick = function () {
-            win.close();
-        };
-
-        win.onClose = function () {
-            try { $.global[LAUNCHER_GLOBAL_KEY] = null; } catch (clearGlobalErr) {}
-        };
-
-        try { $.global[LAUNCHER_GLOBAL_KEY] = win; } catch (storeGlobalErr) {}
-        win.center();
-        win.show();
-    }
-
-    function runCropWorkflow() {
+    function runCropWorkflow(settings) {
         if (!app.project) {
             alert(SCRIPT_NAME + ": no project is open.");
             return;
         }
 
-        var activeComp = app.project.activeItem;
-        var selectedLayers = [];
-        var selectedPrecomps = [];
-        var selectionMode = "project";
-
-        if (activeComp && (activeComp instanceof CompItem)) {
-            try { selectedLayers = activeComp.selectedLayers || []; } catch (selectedLayersErr) {}
-            selectedPrecomps = collectSelectedPrecomps(selectedLayers);
-            if (selectedPrecomps.length > 0) selectionMode = "layers";
-        }
-
-        // If no precomp layers are selected in an active composition, fall back
-        // to CompItems selected directly in the Project panel.
-        if (selectedPrecomps.length === 0) {
-            selectedLayers = [];
-            selectedPrecomps = collectSelectedProjectComps();
-            selectionMode = selectedPrecomps.length > 0 ? "project" : "none";
-        }
-
-        var settings = showSettingsDialog(selectedPrecomps, selectionMode);
-        if (!settings) return;
+        var selection = getCurrentSelection();
+        var selectedLayers = selection.layers;
+        var selectedPrecomps = selection.precomps;
+        var selectionMode = selection.mode;
 
         if (settings.projectWide) {
             selectedPrecomps = collectAllProjectComps();
@@ -170,6 +82,10 @@
         }
         if (selectedPrecomps.length === 0) {
             alert(SCRIPT_NAME + ": select precomp layers or Project-panel compositions, or enable Project-wide preview.");
+            return;
+        }
+        if (settings.scanMode === 2 && selectionMode !== "layers") {
+            alert(SCRIPT_NAME + ": Selected Branch requires precomp layers selected in an active composition.");
             return;
         }
         settings.selectionMode = selectionMode;
@@ -240,6 +156,27 @@
         showReport(report);
     }
 
+    function getCurrentSelection() {
+        var activeComp = app.project ? app.project.activeItem : null;
+        var selectedLayers = [];
+        var selectedPrecomps = [];
+        var selectionMode = "none";
+
+        if (activeComp && (activeComp instanceof CompItem)) {
+            try { selectedLayers = activeComp.selectedLayers || []; } catch (selectedLayersErr) {}
+            selectedPrecomps = collectSelectedPrecomps(selectedLayers);
+            if (selectedPrecomps.length > 0) selectionMode = "layers";
+        }
+
+        if (selectedPrecomps.length === 0) {
+            selectedLayers = [];
+            selectedPrecomps = collectSelectedProjectComps();
+            selectionMode = selectedPrecomps.length > 0 ? "project" : "none";
+        }
+
+        return {layers: selectedLayers, precomps: selectedPrecomps, mode: selectionMode};
+    }
+
     function runCropQueue(cropQueue, settings, report, phaseLabel) {
         var totalFrames = estimateTotalFrames(cropQueue, settings);
         var progress = createProgressWindow(totalFrames, phaseLabel);
@@ -266,19 +203,35 @@
     // UI
     // -------------------------------------------------------------------------
 
-    function showSettingsDialog(precomps, selectionMode) {
+    function showMainWindow() {
+        // Close the obsolete two-stage launcher when this build is run in the
+        // same persistent target engine after an in-place script update.
+        try {
+            var obsoleteLauncher = $.global.__AlphaSmartCropperLauncher__;
+            if (obsoleteLauncher) obsoleteLauncher.close();
+            $.global.__AlphaSmartCropperLauncher__ = null;
+        } catch (obsoleteLauncherErr) {}
+
+        try {
+            var existing = $.global[MAIN_WINDOW_GLOBAL_KEY];
+            if (existing) {
+                existing.show();
+                try { existing.active = true; } catch (activateErr) {}
+                return;
+            }
+        } catch (existingErr) {}
+
         var saved = loadSavedSettings();
-        var dlg = new Window("dialog", SCRIPT_NAME + " " + VERSION);
+        var initialSelection = getCurrentSelection();
+        var selectionMode = initialSelection.mode;
+        var precomps = initialSelection.precomps;
+        var dlg = new Window("palette", SCRIPT_NAME + " " + VERSION);
         dlg.orientation = "column";
         dlg.alignChildren = ["fill", "top"];
         dlg.spacing = 10;
         dlg.margins = 14;
 
-        var introText = selectionMode === "project"
-            ? "Crop Project-panel compositions and, by default, their nested precomps by rendered alpha."
-            : (selectionMode === "none"
-                ? "No crop roots selected. Enable Project-wide preview, or cancel and select layers/compositions."
-                : "Crop selected precomp layers by rendered alpha, not by layer dimensions.");
+        var introText = "Select precomp layers or Project-panel compositions, then run Crop. This window stays open for another selection.";
         var intro = dlg.add("statictext", undefined,
             introText,
             {multiline: true});
@@ -295,9 +248,6 @@
         ]);
         presetDrop.selection = 0;
         presetDrop.preferredSize.width = 220;
-        if (selectionMode !== "layers") {
-            try { presetDrop.items[3].enabled = false; } catch (disableBranchPresetErr) {}
-        }
 
         var scanPanel = dlg.add("panel", undefined, "Time analysis");
         scanPanel.orientation = "column";
@@ -314,12 +264,8 @@
             "Current frame — auto-expand animated bounds"
         ]);
         var initialScanMode = saved.scanMode !== null ? saved.scanMode : 4;
-        if (selectionMode !== "layers" && initialScanMode === 2) initialScanMode = 4;
         scanDrop.selection = initialScanMode;
         scanDrop.preferredSize.width = 365;
-        if (selectionMode !== "layers") {
-            try { scanDrop.items[2].enabled = false; } catch (disableSelectedModeErr) {}
-        }
 
         var stepRow = scanPanel.add("group");
         stepRow.add("statictext", undefined, "Frame step:");
@@ -363,7 +309,7 @@
 
         var centerAnchorCheck = safePanel.add("checkbox", undefined, "Center resulting precomp Anchor Point (via Position)");
         centerAnchorCheck.value = saved.centerAnchor !== null ? saved.centerAnchor : true;
-        centerAnchorCheck.helpTip = "Optional workflow convenience. Centers each usage Anchor Point after cropping and compensates Position. For safety, this mode skips a source comp if any usage is 3D, uses Collapse Transformations, has animated Anchor Point/Scale/Rotation, non-zero Skew, or an expression-driven transform needed for compensation.";
+        centerAnchorCheck.helpTip = "Optional workflow convenience. Centers each safe usage Anchor Point after cropping and compensates Position. If a usage cannot be centered safely, Crop still proceeds for the source comp and that usage receives standard anchor compensation instead.";
 
         var allowCollapse2DCheck = safePanel.add("checkbox", undefined, "Allow 2D Collapse Transformations usages");
         allowCollapse2DCheck.value = saved.allowCollapse2D !== null ? saved.allowCollapse2D : true;
@@ -381,7 +327,7 @@
         skipEssentialCheck.helpTip = "Essential Properties can override source values per precomp instance, so one source-only alpha scan may not describe every usage. Disable only if you know the exposed properties cannot affect alpha/bounds.";
 
         var recursiveCheck = safePanel.add("checkbox", undefined, "Recursively crop nested precomps first");
-        recursiveCheck.value = selectionMode === "project" ? true : (saved.recursiveCrop !== null ? saved.recursiveCrop : false);
+        recursiveCheck.value = saved.recursiveCrop !== null ? saved.recursiveCrop : (selectionMode === "project");
         recursiveCheck.helpTip = "Processes unique nested precomps deepest-first. Shared nested comps are modified globally and every project usage is compensated. In Selected Layers scan mode, only source times reachable from the selected branch are analyzed; this can intentionally ignore animation used only by unrelated usages.";
 
         var projectWideCheck = safePanel.add("checkbox", undefined, "Project-wide preview, then apply all safe crops");
@@ -406,7 +352,7 @@
                 scanDrop.selection = 0;
                 frameStepEdit.text = "1";
                 staticOptimizeCheck.value = true;
-            } else if (index === 3 && selectionMode === "layers") {
+            } else if (index === 3) {
                 scanDrop.selection = 2;
                 frameStepEdit.text = "1";
                 staticOptimizeCheck.value = true;
@@ -422,74 +368,108 @@
         scanDrop.onChange = updateTimeControls;
         updateTimeControls();
 
-        var estimateLabel = selectionMode === "project"
-            ? "Selected Project-panel compositions: "
-            : (selectionMode === "none" ? "Selected crop roots: " : "Selected source precomps: ");
-        var estimate = dlg.add("statictext", undefined, estimateLabel + precomps.length);
+        var estimate = dlg.add("statictext", undefined, "Selection: " + selectionMode + "; source precomps: " + precomps.length);
         estimate.alignment = ["fill", "top"];
+
+        function refreshSelectionLabel() {
+            var current = getCurrentSelection();
+            estimate.text = "Selection: " + current.mode + "; source precomps: " + current.precomps.length;
+            try { dlg.layout.layout(true); } catch (layoutErr) {}
+        }
 
         var buttons = dlg.add("group");
         buttons.alignment = ["fill", "top"];
         buttons.alignChildren = ["fill", "center"];
         var cropGroup = buttons.add("group");
         cropGroup.alignment = ["left", "center"];
-        var okButton = cropGroup.add("button", undefined, "Crop", {name: "ok"});
+        var okButton = cropGroup.add("button", undefined, "Crop");
         okButton.preferredSize.width = 120;
         var buttonSpacer = buttons.add("group");
         buttonSpacer.alignment = ["fill", "fill"];
         var cancelGroup = buttons.add("group");
         cancelGroup.alignment = ["right", "center"];
-        var cancelButton = cancelGroup.add("button", undefined, "Cancel", {name: "cancel"});
-        cancelButton.preferredSize.width = 120;
+        var exitButton = cancelGroup.add("button", undefined, "Exit");
+        exitButton.preferredSize.width = 120;
 
-        if (dlg.show() !== 1) return null;
+        function collectSettingsFromWindow() {
+            var padding = parseFloat(paddingEdit.text);
+            if (isNaN(padding) || padding < 0) {
+                alert(SCRIPT_NAME + ": Padding must be a number >= 0.");
+                return null;
+            }
 
-        var padding = parseFloat(paddingEdit.text);
-        if (isNaN(padding) || padding < 0) {
-            alert(SCRIPT_NAME + ": Padding must be a number >= 0.");
-            return null;
+            var alphaEpsilon = parseFloat(alphaEdit.text);
+            if (isNaN(alphaEpsilon) || alphaEpsilon < 0) {
+                alert(SCRIPT_NAME + ": Alpha epsilon must be a number >= 0.");
+                return null;
+            }
+
+            var frameStep = parseInt(frameStepEdit.text, 10);
+            if (isNaN(frameStep) || frameStep < 1) {
+                alert(SCRIPT_NAME + ": Frame step must be an integer >= 1.");
+                return null;
+            }
+
+            if (projectWideCheck.value && scanDrop.selection.index === 2) {
+                alert(SCRIPT_NAME + ": Selected Branch cannot be combined with Project-wide preview. Choose Current Frame or Safe Animation.");
+                return null;
+            }
+
+            var result = {
+                // 0 entire, 1 all usages, 2 selected usages, 3 work area, 4 current
+                scanMode: scanDrop.selection.index,
+                frameStep: frameStep,
+                autoStatic: staticOptimizeCheck.value,
+                padding: padding,
+                alphaEpsilon: alphaEpsilon,
+                preserveChildren: preserveChildrenCheck.value,
+                centerAnchor: centerAnchorCheck.value,
+                allowCollapse2D: allowCollapse2DCheck.value,
+                skipSolo: skipSoloCheck.value,
+                strictUsageEffects: strictEffectsCheck.value,
+                skipEssentialProperties: skipEssentialCheck.value,
+                recursiveCrop: recursiveCheck.value,
+                projectWide: projectWideCheck.value,
+                dryRun: dryRunCheck.value
+            };
+            saveSettings(result);
+            return result;
         }
 
-        var alphaEpsilon = parseFloat(alphaEdit.text);
-        if (isNaN(alphaEpsilon) || alphaEpsilon < 0) {
-            alert(SCRIPT_NAME + ": Alpha epsilon must be a number >= 0.");
-            return null;
-        }
+        var running = false;
+        okButton.onClick = function () {
+            if (running) return;
+            var settings = collectSettingsFromWindow();
+            if (!settings) return;
 
-        var frameStep = parseInt(frameStepEdit.text, 10);
-        if (isNaN(frameStep) || frameStep < 1) {
-            alert(SCRIPT_NAME + ": Frame step must be an integer >= 1.");
-            return null;
-        }
+            running = true;
+            okButton.enabled = false;
+            exitButton.enabled = false;
+            estimate.text = "Running…";
+            try { dlg.update(); } catch (beforeRunUpdateErr) {}
 
-        if (selectionMode !== "layers" && scanDrop.selection.index === 2) {
-            alert(SCRIPT_NAME + ": Selected Layers scan mode requires precomp layers selected in an active composition.");
-            return null;
-        }
-        if (projectWideCheck.value && scanDrop.selection.index === 2) {
-            alert(SCRIPT_NAME + ": Selected Branch cannot be combined with Project-wide preview. Choose Current Frame or Safe Animation.");
-            return null;
-        }
-
-        var result = {
-            // 0 entire, 1 all usages, 2 selected usages, 3 work area, 4 current
-            scanMode: scanDrop.selection.index,
-            frameStep: frameStep,
-            autoStatic: staticOptimizeCheck.value,
-            padding: padding,
-            alphaEpsilon: alphaEpsilon,
-            preserveChildren: preserveChildrenCheck.value,
-            centerAnchor: centerAnchorCheck.value,
-            allowCollapse2D: allowCollapse2DCheck.value,
-            skipSolo: skipSoloCheck.value,
-            strictUsageEffects: strictEffectsCheck.value,
-            skipEssentialProperties: skipEssentialCheck.value,
-            recursiveCrop: recursiveCheck.value,
-            projectWide: projectWideCheck.value,
-            dryRun: dryRunCheck.value
+            try {
+                runCropWorkflow(settings);
+            } catch (err) {
+                alert(SCRIPT_NAME + ": " + errorToString(err));
+            } finally {
+                running = false;
+                okButton.enabled = true;
+                exitButton.enabled = true;
+                refreshSelectionLabel();
+                try { dlg.update(); } catch (afterRunUpdateErr) {}
+            }
         };
-        saveSettings(result);
-        return result;
+
+        exitButton.onClick = function () { dlg.close(); };
+        dlg.onActivate = refreshSelectionLabel;
+        dlg.onClose = function () {
+            try { $.global[MAIN_WINDOW_GLOBAL_KEY] = null; } catch (clearGlobalErr) {}
+        };
+
+        try { $.global[MAIN_WINDOW_GLOBAL_KEY] = dlg; } catch (storeGlobalErr) {}
+        dlg.center();
+        dlg.show();
     }
 
     function loadSavedSettings() {
@@ -1008,12 +988,10 @@
                 if (settings.centerAnchor) {
                     var centerResult = inspectCenterAnchorUsage(layer);
                     if (!centerResult.ok) {
-                        return {
-                            ok: false,
-                            reason: "cannot safely center usage Anchor Point via Position: " + item.name + " / " + layer.name + " — " + centerResult.reason
-                        };
+                        report.push("WARN " + sourceComp.name + ": Anchor Point centering disabled for this usage; Crop will use standard anchor compensation: " + item.name + " / " + layer.name + " — " + centerResult.reason);
+                    } else {
+                        centerData = centerResult.data;
                     }
-                    centerData = centerResult.data;
                 }
 
                 if (hasEssentialProperties(layer)) {
@@ -1255,7 +1233,7 @@
     function compensateUsageChildren(usages, dx, dy, centerAnchor, newW, newH) {
         for (var i = 0; i < usages.length; i++) {
             var anchorShift = [dx, dy];
-            if (centerAnchor) {
+            if (centerAnchor && usages[i].centerData) {
                 var oldAnchor = usages[i].centerData.anchor;
                 anchorShift = [(newW / 2) - oldAnchor[0], (newH / 2) - oldAnchor[1]];
             }
@@ -1275,7 +1253,7 @@
             var data = usages[i];
             withLayerUnlocked(data.layer, function () {
                 var anchor = getTransformProperty(data.layer, "ADBE Anchor Point");
-                if (centerAnchor) {
+                if (centerAnchor && data.centerData) {
                     var targetAnchor = [newW / 2, newH / 2];
                     var defaultAnchor = [data.centerData.anchor[0] + dx, data.centerData.anchor[1] + dy];
                     var localRemainder = [targetAnchor[0] - defaultAnchor[0], targetAnchor[1] - defaultAnchor[1]];
@@ -1308,8 +1286,8 @@
             if ((anchor.numKeys || 0) > 0) return {ok: false, reason: "Anchor Point is animated"};
             if (!isStaticExpressionFreeProperty(scale)) return {ok: false, reason: "Scale is animated or expression-driven"};
             if (!isStaticExpressionFreeProperty(rotation)) return {ok: false, reason: "Rotation is animated or expression-driven"};
-            if (!isStaticExpressionFreeProperty(skew) || !isStaticExpressionFreeProperty(skewAxis)) return {ok: false, reason: "Skew is animated or expression-driven"};
-            if (Math.abs(skew.value) > 0.0000001) return {ok: false, reason: "non-zero Skew is not supported by centered-anchor compensation"};
+            if ((skew && !isStaticExpressionFreeProperty(skew)) || (skewAxis && !isStaticExpressionFreeProperty(skewAxis))) return {ok: false, reason: "Skew is animated or expression-driven"};
+            if (skew && Math.abs(skew.value) > 0.0000001) return {ok: false, reason: "non-zero Skew is not supported by centered-anchor compensation"};
 
             return {
                 ok: true,
@@ -2560,6 +2538,6 @@
         return s;
     }
 
-    showLauncher();
+    showMainWindow();
 
 })(this);

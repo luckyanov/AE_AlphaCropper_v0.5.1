@@ -40,7 +40,9 @@ The script finds the first and last pixels with non-zero alpha, resizes the sour
 - Persists the last-used settings between runs through `app.settings`.
 - Long scans can be interrupted with `Stop analysis`.
 - Project-wide mode previews every composition and requires a separate confirmation before applying changes.
-- Keeps a small launcher palette open so the selection can be changed and Crop can be run again without rerunning the JSX.
+- Keeps the complete settings window open after each Crop so the selection or settings can be changed and run again without rerunning the JSX.
+- Uses `Exit` as the explicit close button; completing a Crop does not close the script UI.
+- Falls back to standard anchor compensation per usage when optional Anchor Point centering is unsafe, instead of skipping the source composition.
 - Builds the project-wide usage index once per run.
 - Caches repeated rectangular `sampleImage()` queries inside the alpha analyzer.
 
@@ -103,7 +105,7 @@ Copy the JSX into the installed After Effects `Scripts` directory without a vers
 C:\Program Files\Adobe\Adobe After Effects 2025\Support Files\Scripts\AlphaSmartCropper.jsx
 ```
 
-then restart After Effects. A ScriptUI Panel installation is not required: version 0.5.0 opens a persistent modeless launcher palette.
+then restart After Effects. A ScriptUI Panel installation is not required: version 0.5.0 opens a persistent modeless settings palette.
 
 ---
 
@@ -111,10 +113,9 @@ then restart After Effects. A ScriptUI Panel installation is not required: versi
 
 1. Run `AlphaSmartCropper_v0.5.0.jsx` or the installed `AlphaSmartCropper.jsx`.
 2. Select one or more **precomp layers**, or compositions in the Project panel.
-3. Click `Crop...` in the launcher.
-4. Choose the analysis settings and perform the crop.
-5. After reviewing the report, change the selection and click `Crop...` again.
-6. Close the launcher with its title-bar X or the `Close` button.
+3. Choose the analysis settings and click `Crop`.
+4. After reviewing the report, change the selection or settings and click `Crop` again.
+5. Close the persistent settings window with its title-bar X or the `Exit` button.
 
 All actual modifications are placed in one Undo Group.
 
@@ -474,7 +475,7 @@ Keep a saved `.aep` version before the first large batch. Undo is useful, but a 
 7. `Frame step > 1` cannot guarantee intermediate animation extremes.
 8. Selected-usage mode can intentionally ignore data used by other instances.
 9. Unusual `displayStartTime` and complex subframe temporal effects require further AE testing.
-10. Position-based centered-anchor compensation is intentionally limited to safe 2D usages with static Scale/Rotation and no Collapse Transformations.
+10. Position-based centered-anchor compensation is intentionally limited to safe 2D usages with static Scale/Rotation and no Collapse Transformations. An unsafe usage receives standard anchor compensation and a warning; it no longer blocks Crop for the source composition.
 11. The `Opacity = 100%` rule applies to Layer Transform Opacity. Mask Opacity, Shape Fill/Stroke Opacity, and effects that modify alpha remain part of the final rendered result.
 
 ---
@@ -526,7 +527,9 @@ Project/branch batch analysis with a summary such as:
 - Added a two-pass project-wide preview with a combined summary and explicit apply confirmation.
 - Allowed project-wide mode to run without preselected crop roots.
 - Renamed the script to `AlphaSmartCropper_v0.5.0.jsx`.
-- Added a persistent launcher palette for repeated runs with a new selection; it closes through the title-bar X or `Close` button.
+- Replaced the separate launcher with a persistent full settings palette; Crop leaves it open and `Exit` closes it.
+- Fixed missing Layer Transform Skew being misclassified as animated Skew.
+- Made unsafe optional Anchor Point centering fall back per usage instead of skipping the complete source composition.
 - Excluded Layer Opacity from bounds by safely overriding it to 100% during analysis and restoring it afterward.
 - Made Current Frame automatically expand to a full frame-by-frame scan for geometrically significant animation.
 
