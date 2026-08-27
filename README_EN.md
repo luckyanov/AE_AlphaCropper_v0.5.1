@@ -522,6 +522,7 @@ Project/branch batch analysis with a summary such as:
 
 ## 0.5.1
 
+- Hardened progress cleanup: completion reaches 100%, Stop hides the palette immediately, and any remaining progress window is force-closed before a report opens.
 - Made the progress palette hide and close reliably before the completion report appears.
 - Increased Stop responsiveness by pumping ScriptUI events between individual alpha samples, including during a single-frame scan.
 - Explicitly selected Project-panel roots now proceed with a warning when an external usage has Essential Properties; nested and non-selected sources retain strict skipping.

@@ -221,6 +221,8 @@
             $.global.__AlphaSmartCropperLauncher__ = null;
         } catch (obsoleteLauncherErr) {}
 
+        forceCloseProgressWindow();
+
         try {
             var existing = $.global[MAIN_WINDOW_GLOBAL_KEY];
             if (existing) {
@@ -551,15 +553,7 @@
     function createProgressWindow(totalFrames, phaseLabel) {
         var win = null;
         try {
-            try {
-                var staleProgress = $.global[PROGRESS_WINDOW_GLOBAL_KEY];
-                if (staleProgress) {
-                    try { staleProgress.hide(); } catch (staleHideErr) {}
-                    try { staleProgress.onClose = null; } catch (staleOnCloseErr) {}
-                    try { staleProgress.close(); } catch (staleCloseErr) {}
-                }
-                $.global[PROGRESS_WINDOW_GLOBAL_KEY] = null;
-            } catch (staleProgressErr) {}
+            forceCloseProgressWindow();
 
             win = new Window("palette", SCRIPT_NAME + " — " + (phaseLabel || "scanning alpha"));
             win.orientation = "column";
@@ -569,16 +563,17 @@
             var bar = win.add("progressbar", undefined, 0, Math.max(1, totalFrames));
             bar.preferredSize.width = 360;
             var stopButton = win.add("button", undefined, "Stop analysis");
-            var state = {count: 0, cancelled: false, finishing: false};
+            var state = {count: 0, cancelled: false, finished: false};
             stopButton.onClick = function () {
                 state.cancelled = true;
                 stopButton.enabled = false;
                 text.text = "Stopping…";
                 try { win.update(); } catch (stopUpdateErr) {}
+                try { win.hide(); } catch (stopHideErr) {}
             };
             win.onClose = function () {
-                if (!state.finishing) state.cancelled = true;
-                return state.finishing;
+                if (!state.finished) state.cancelled = true;
+                return true;
             };
             win.show();
             try { $.global[PROGRESS_WINDOW_GLOBAL_KEY] = win; } catch (storeProgressErr) {}
@@ -602,23 +597,39 @@
                     return state.cancelled;
                 },
                 close: function () {
-                    state.finishing = true;
-                    try { win.hide(); } catch (hideErr) {}
-                    try { win.close(); } catch (closeErr) {}
-                    try { $.global[PROGRESS_WINDOW_GLOBAL_KEY] = null; } catch (clearProgressErr) {}
+                    if (state.finished) return;
+                    state.finished = true;
+                    if (!state.cancelled) {
+                        try { bar.value = maxFrames; } catch (completeBarErr) {}
+                        try { text.text = "Complete."; } catch (completeTextErr) {}
+                        try { win.update(); } catch (completeUpdateErr) {}
+                    }
+                    forceCloseProgressWindow(win);
                 }
             };
         } catch (err) {
-            if (win) {
-                try { win.hide(); } catch (failedHideErr) {}
-                try { win.close(); } catch (failedCloseErr) {}
-            }
-            try { $.global[PROGRESS_WINDOW_GLOBAL_KEY] = null; } catch (failedClearErr) {}
+            forceCloseProgressWindow(win);
             return null;
         }
     }
 
+    function forceCloseProgressWindow(explicitWindow) {
+        var target = explicitWindow || null;
+        if (!target) {
+            try { target = $.global[PROGRESS_WINDOW_GLOBAL_KEY]; } catch (readProgressErr) {}
+        }
+
+        if (target) {
+            try { target.onClose = null; } catch (clearOnCloseErr) {}
+            try { target.visible = false; } catch (visibilityErr) {}
+            try { target.hide(); } catch (hideErr) {}
+            try { target.close(); } catch (closeErr) {}
+        }
+        try { $.global[PROGRESS_WINDOW_GLOBAL_KEY] = null; } catch (clearProgressErr) {}
+    }
+
     function showReport(report) {
+        forceCloseProgressWindow();
         if (!report || report.length === 0) {
             alert(SCRIPT_NAME + ": nothing to do.");
             return;
@@ -635,6 +646,7 @@
     }
 
     function showProjectPreviewReport(report) {
+        forceCloseProgressWindow();
         var dlg = new Window("dialog", SCRIPT_NAME + " — project-wide preview");
         dlg.orientation = "column";
         dlg.alignChildren = ["fill", "fill"];
