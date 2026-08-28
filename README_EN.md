@@ -2,7 +2,7 @@
 
 [English](README_EN.md) · [Русский](README_RU.md)
 
-**Current version: 0.5.1**
+**Current version: 0.5.2**
 
 Alpha Smart Cropper is a JSX script that automatically crops After Effects precompositions to their **actually rendered alpha channel**, rather than to the geometric dimensions of their layers.
 
@@ -94,7 +94,7 @@ File → Scripts → Run Script File...
 and select:
 
 ```text
-AlphaSmartCropper_v0.5.1.jsx
+AlphaSmartCropper_v0.5.2.jsx
 ```
 
 ### Permanent installation
@@ -105,13 +105,13 @@ Copy the JSX into the installed After Effects `Scripts` directory without a vers
 C:\Program Files\Adobe\Adobe After Effects 2025\Support Files\Scripts\AlphaSmartCropper.jsx
 ```
 
-then restart After Effects. A ScriptUI Panel installation is not required: version 0.5.1 opens a persistent modeless settings palette.
+then restart After Effects. A ScriptUI Panel installation is not required: version 0.5.2 opens a persistent modeless settings palette.
 
 ---
 
 ## Basic usage
 
-1. Run `AlphaSmartCropper_v0.5.1.jsx` or the installed `AlphaSmartCropper.jsx`.
+1. Run `AlphaSmartCropper_v0.5.2.jsx` or the installed `AlphaSmartCropper.jsx`.
 2. Select one or more **precomp layers**, or compositions in the Project panel.
 3. Choose the analysis settings and click `Crop`.
 4. After reviewing the report, change the selection or settings and click `Crop` again.
@@ -338,7 +338,7 @@ collects every composition in the project, orders them deepest-first, and perfor
 
 The apply pass deliberately scans again so changes to nested comps and dimension-dependent expressions are reflected. This makes project-wide mode slower but safer than reusing stale bounds.
 
-During processing, an inline progress section appears inside the persistent settings window. It includes `Stop analysis`, which is checked between individual alpha samples, including within a single-frame scan. The section disappears when the pass finishes. If the apply pass is stopped, already processed compositions remain changed, but the whole pass is contained in one Undo Group.
+The inline progress section is always visible inside the persistent settings window. Its initial state is `Ready — 0%`; during processing it shows the current percentage and enables `Stop analysis`; after success it remains at `Complete — 100%`, and after cancellation it shows `Stopped`. Cancellation is checked between individual alpha samples, including within a single-frame scan. If the apply pass is stopped, already processed compositions remain changed, but the whole pass is contained in one Undo Group.
 
 Project-wide preview can be started without preselecting layers or compositions.
 
@@ -466,7 +466,7 @@ Keep a saved `.aep` version before the first large batch. Undo is useful, but a 
 
 ---
 
-# Known limitations in 0.5.1
+# Known limitations in 0.5.2
 
 1. 3D source comps are not supported.
 2. Collapsed 3D usages are not supported.
@@ -519,6 +519,12 @@ Project/branch batch analysis with a summary such as:
 ---
 
 # Version history
+
+## 0.5.2
+
+- Made the inline progress section permanently visible in the main settings window.
+- Added explicit `Ready — 0%`, active percentage, `Complete — 100%`, and `Stopped` states.
+- Kept `Stop analysis` disabled while idle and enabled only during processing.
 
 ## 0.5.1
 

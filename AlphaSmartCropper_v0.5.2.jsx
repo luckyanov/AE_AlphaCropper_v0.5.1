@@ -2,9 +2,9 @@
 #targetengine "AlphaSmartCropperEngine"
 
 /**
- * AlphaSmartCropper_v0.5.1.jsx
+ * AlphaSmartCropper_v0.5.2.jsx
  * by Stray Token / Luckyanov D.S.
- * Version 0.5.1
+ * Version 0.5.2
  *
  * Alpha-aware precomp cropper for Adobe After Effects.
  *
@@ -60,7 +60,7 @@
  */
 
 (function AlphaSmartCropper(thisObj) {
-    var VERSION = "0.5.1";
+    var VERSION = "0.5.2";
     var SCRIPT_NAME = "Alpha Smart Cropper";
     var SETTINGS_SECTION = "AlphaSmartCropper_0_5";
     var MAIN_WINDOW_GLOBAL_KEY = "__AlphaSmartCropperMainWindow__";
@@ -235,7 +235,7 @@
 
         try {
             var existing = $.global[MAIN_WINDOW_GLOBAL_KEY];
-            if (existing && existing.__ascUiBuild === "0.5.1-inline-progress") {
+            if (existing && existing.__ascUiBuild === "0.5.2-always-progress") {
                 existing.show();
                 try { existing.active = true; } catch (activateErr) {}
                 return;
@@ -252,7 +252,7 @@
         var selectionMode = initialSelection.mode;
         var precomps = initialSelection.precomps;
         var dlg = new Window("palette", SCRIPT_NAME + " " + VERSION);
-        dlg.__ascUiBuild = "0.5.1-inline-progress";
+        dlg.__ascUiBuild = "0.5.2-always-progress";
         dlg.orientation = "column";
         dlg.alignChildren = ["fill", "top"];
         dlg.spacing = 10;
@@ -408,20 +408,13 @@
         progressPanel.orientation = "column";
         progressPanel.alignChildren = ["fill", "top"];
         progressPanel.margins = 10;
-        var progressText = progressPanel.add("statictext", undefined, "Preparing…");
+        var progressText = progressPanel.add("statictext", undefined, "Ready — 0%");
         var progressBar = progressPanel.add("progressbar", undefined, 0, 1);
         progressBar.preferredSize.width = 365;
         var progressStopButton = progressPanel.add("button", undefined, "Stop analysis");
-        progressPanel.visible = false;
+        progressStopButton.enabled = false;
 
         var progressState = {active: false, cancelled: false, count: 0, maximum: 1};
-
-        function setProgressVisible(visible) {
-            try { progressPanel.visible = visible; } catch (visibilityErr) {}
-            try { dlg.layout.layout(true); } catch (progressLayoutErr) {}
-            try { dlg.size = dlg.preferredSize; } catch (progressResizeErr) {}
-            try { dlg.update(); } catch (progressWindowUpdateErr) {}
-        }
 
         progressStopButton.onClick = function () {
             if (!progressState.active) return;
@@ -442,7 +435,7 @@
                 progressBar.value = 0;
                 progressText.text = "Preparing " + (phaseLabel || "analysis") + "…";
                 progressStopButton.enabled = true;
-                setProgressVisible(true);
+                try { dlg.update(); } catch (progressBeginUpdateErr) {}
             },
             setText: function (s) {
                 if (!progressState.active) return;
@@ -453,7 +446,8 @@
                 if (!progressState.active) return;
                 progressState.count++;
                 progressBar.value = Math.min(progressState.maximum, progressState.count);
-                if (s) progressText.text = s;
+                var percent = Math.round((progressBar.value / progressState.maximum) * 100);
+                progressText.text = (s ? s + " — " : "") + percent + "%";
                 try { dlg.update(); } catch (progressTickUpdateErr) {}
                 try { $.sleep(1); } catch (progressTickSleepErr) {}
             },
@@ -464,10 +458,16 @@
             },
             finish: function () {
                 if (!progressState.active) return;
-                if (!progressState.cancelled) progressBar.value = progressState.maximum;
+                if (progressState.cancelled) {
+                    var stoppedPercent = Math.round((progressBar.value / progressState.maximum) * 100);
+                    progressText.text = "Stopped — " + stoppedPercent + "%";
+                } else {
+                    progressBar.value = progressState.maximum;
+                    progressText.text = "Complete — 100%";
+                }
                 progressStopButton.enabled = false;
                 progressState.active = false;
-                setProgressVisible(false);
+                try { dlg.update(); } catch (progressFinishUpdateErr) {}
             }
         };
 
