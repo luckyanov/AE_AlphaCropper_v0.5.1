@@ -338,7 +338,7 @@ collects every composition in the project, orders them deepest-first, and perfor
 
 The apply pass deliberately scans again so changes to nested comps and dimension-dependent expressions are reflected. This makes project-wide mode slower but safer than reusing stale bounds.
 
-The progress window includes `Stop analysis`. Cancellation takes effect after the current frame scan. If the apply pass is stopped, already processed compositions remain changed, but the whole pass is contained in one Undo Group.
+During processing, an inline progress section appears inside the persistent settings window. It includes `Stop analysis`, which is checked between individual alpha samples, including within a single-frame scan. The section disappears when the pass finishes. If the apply pass is stopped, already processed compositions remain changed, but the whole pass is contained in one Undo Group.
 
 Project-wide preview can be started without preselecting layers or compositions.
 
@@ -522,8 +522,7 @@ Project/branch batch analysis with a summary such as:
 
 ## 0.5.1
 
-- Hardened progress cleanup: completion reaches 100%, Stop hides the palette immediately, and any remaining progress window is force-closed before a report opens.
-- Made the progress palette hide and close reliably before the completion report appears.
+- Removed the separate modeless progress palette and embedded progress plus `Stop analysis` into the persistent settings window; the inline section disappears before the report opens.
 - Increased Stop responsiveness by pumping ScriptUI events between individual alpha samples, including during a single-frame scan.
 - Explicitly selected Project-panel roots now proceed with a warning when an external usage has Essential Properties; nested and non-selected sources retain strict skipping.
 - Kept the complete modeless settings window open after Crop and replaced the close action with `Exit`.

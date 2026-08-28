@@ -64,7 +64,6 @@
     var SCRIPT_NAME = "Alpha Smart Cropper";
     var SETTINGS_SECTION = "AlphaSmartCropper_0_5";
     var MAIN_WINDOW_GLOBAL_KEY = "__AlphaSmartCropperMainWindow__";
-    var PROGRESS_WINDOW_GLOBAL_KEY = "__AlphaSmartCropperProgressWindow__";
 
     function runCropWorkflow(settings) {
         if (!app.project) {
@@ -185,7 +184,7 @@
 
     function runCropQueue(cropQueue, settings, report, phaseLabel) {
         var totalFrames = estimateTotalFrames(cropQueue, settings);
-        var progress = createProgressWindow(totalFrames, phaseLabel);
+        var progress = createProgressController(totalFrames, phaseLabel, settings.progressHost);
 
         app.beginUndoGroup(SCRIPT_NAME + " — " + phaseLabel);
         try {
@@ -221,14 +220,30 @@
             $.global.__AlphaSmartCropperLauncher__ = null;
         } catch (obsoleteLauncherErr) {}
 
-        forceCloseProgressWindow();
+        // Migration cleanup for the last progress palette created by builds that
+        // used a separate modeless window. New runs use inline progress only.
+        try {
+            var obsoleteProgress = $.global.__AlphaSmartCropperProgressWindow__;
+            if (obsoleteProgress) {
+                try { obsoleteProgress.onClose = null; } catch (obsoleteProgressOnCloseErr) {}
+                try { obsoleteProgress.visible = false; } catch (obsoleteProgressVisibleErr) {}
+                try { obsoleteProgress.hide(); } catch (obsoleteProgressHideErr) {}
+                try { obsoleteProgress.close(); } catch (obsoleteProgressCloseErr) {}
+            }
+            $.global.__AlphaSmartCropperProgressWindow__ = null;
+        } catch (obsoleteProgressErr) {}
 
         try {
             var existing = $.global[MAIN_WINDOW_GLOBAL_KEY];
-            if (existing) {
+            if (existing && existing.__ascUiBuild === "0.5.1-inline-progress") {
                 existing.show();
                 try { existing.active = true; } catch (activateErr) {}
                 return;
+            }
+            if (existing) {
+                try { existing.onClose = null; } catch (obsoleteMainOnCloseErr) {}
+                try { existing.close(); } catch (obsoleteMainCloseErr) {}
+                $.global[MAIN_WINDOW_GLOBAL_KEY] = null;
             }
         } catch (existingErr) {}
 
@@ -237,6 +252,7 @@
         var selectionMode = initialSelection.mode;
         var precomps = initialSelection.precomps;
         var dlg = new Window("palette", SCRIPT_NAME + " " + VERSION);
+        dlg.__ascUiBuild = "0.5.1-inline-progress";
         dlg.orientation = "column";
         dlg.alignChildren = ["fill", "top"];
         dlg.spacing = 10;
@@ -388,6 +404,73 @@
             try { dlg.layout.layout(true); } catch (layoutErr) {}
         }
 
+        var progressPanel = dlg.add("panel", undefined, "Analysis progress");
+        progressPanel.orientation = "column";
+        progressPanel.alignChildren = ["fill", "top"];
+        progressPanel.margins = 10;
+        var progressText = progressPanel.add("statictext", undefined, "Preparing…");
+        var progressBar = progressPanel.add("progressbar", undefined, 0, 1);
+        progressBar.preferredSize.width = 365;
+        var progressStopButton = progressPanel.add("button", undefined, "Stop analysis");
+        progressPanel.visible = false;
+
+        var progressState = {active: false, cancelled: false, count: 0, maximum: 1};
+
+        function setProgressVisible(visible) {
+            try { progressPanel.visible = visible; } catch (visibilityErr) {}
+            try { dlg.layout.layout(true); } catch (progressLayoutErr) {}
+            try { dlg.size = dlg.preferredSize; } catch (progressResizeErr) {}
+            try { dlg.update(); } catch (progressWindowUpdateErr) {}
+        }
+
+        progressStopButton.onClick = function () {
+            if (!progressState.active) return;
+            progressState.cancelled = true;
+            progressStopButton.enabled = false;
+            progressText.text = "Stopping…";
+            try { dlg.update(); } catch (stopUpdateErr) {}
+        };
+
+        var progressHost = {
+            begin: function (maximum, phaseLabel) {
+                progressState.active = true;
+                progressState.cancelled = false;
+                progressState.count = 0;
+                progressState.maximum = Math.max(1, maximum);
+                progressBar.minvalue = 0;
+                progressBar.maxvalue = progressState.maximum;
+                progressBar.value = 0;
+                progressText.text = "Preparing " + (phaseLabel || "analysis") + "…";
+                progressStopButton.enabled = true;
+                setProgressVisible(true);
+            },
+            setText: function (s) {
+                if (!progressState.active) return;
+                progressText.text = s;
+                try { dlg.update(); } catch (progressTextUpdateErr) {}
+            },
+            tick: function (s) {
+                if (!progressState.active) return;
+                progressState.count++;
+                progressBar.value = Math.min(progressState.maximum, progressState.count);
+                if (s) progressText.text = s;
+                try { dlg.update(); } catch (progressTickUpdateErr) {}
+                try { $.sleep(1); } catch (progressTickSleepErr) {}
+            },
+            isCancelled: function () {
+                try { dlg.update(); } catch (progressCancelUpdateErr) {}
+                try { $.sleep(1); } catch (progressCancelSleepErr) {}
+                return progressState.cancelled;
+            },
+            finish: function () {
+                if (!progressState.active) return;
+                if (!progressState.cancelled) progressBar.value = progressState.maximum;
+                progressStopButton.enabled = false;
+                progressState.active = false;
+                setProgressVisible(false);
+            }
+        };
+
         var buttons = dlg.add("group");
         buttons.alignment = ["fill", "top"];
         buttons.alignChildren = ["fill", "center"];
@@ -460,10 +543,12 @@
             try { dlg.update(); } catch (beforeRunUpdateErr) {}
 
             try {
+                settings.progressHost = progressHost;
                 runCropWorkflow(settings);
             } catch (err) {
                 alert(SCRIPT_NAME + ": " + errorToString(err));
             } finally {
+                progressHost.finish();
                 running = false;
                 okButton.enabled = true;
                 exitButton.enabled = true;
@@ -550,86 +635,23 @@
         return isNaN(parsed) ? null : parsed;
     }
 
-    function createProgressWindow(totalFrames, phaseLabel) {
-        var win = null;
+    function createProgressController(totalFrames, phaseLabel, host) {
+        if (!host) return null;
         try {
-            forceCloseProgressWindow();
-
-            win = new Window("palette", SCRIPT_NAME + " — " + (phaseLabel || "scanning alpha"));
-            win.orientation = "column";
-            win.alignChildren = ["fill", "top"];
-            win.margins = 12;
-            var text = win.add("statictext", undefined, "Preparing...");
-            var bar = win.add("progressbar", undefined, 0, Math.max(1, totalFrames));
-            bar.preferredSize.width = 360;
-            var stopButton = win.add("button", undefined, "Stop analysis");
-            var state = {count: 0, cancelled: false, finished: false};
-            stopButton.onClick = function () {
-                state.cancelled = true;
-                stopButton.enabled = false;
-                text.text = "Stopping…";
-                try { win.update(); } catch (stopUpdateErr) {}
-                try { win.hide(); } catch (stopHideErr) {}
-            };
-            win.onClose = function () {
-                if (!state.finished) state.cancelled = true;
-                return true;
-            };
-            win.show();
-            try { $.global[PROGRESS_WINDOW_GLOBAL_KEY] = win; } catch (storeProgressErr) {}
-
-            var maxFrames = Math.max(1, totalFrames);
+            host.begin(Math.max(1, totalFrames), phaseLabel || "scanning alpha");
             return {
-                setText: function (s) {
-                    text.text = s;
-                    try { win.update(); } catch (e) {}
-                },
-                tick: function (s) {
-                    state.count++;
-                    if (state.count <= maxFrames) bar.value = state.count;
-                    if (s) text.text = s;
-                    try { win.update(); } catch (e) {}
-                    try { $.sleep(1); } catch (sleepErr) {}
-                },
-                isCancelled: function () {
-                    try { win.update(); } catch (e) {}
-                    try { $.sleep(1); } catch (sleepErr) {}
-                    return state.cancelled;
-                },
-                close: function () {
-                    if (state.finished) return;
-                    state.finished = true;
-                    if (!state.cancelled) {
-                        try { bar.value = maxFrames; } catch (completeBarErr) {}
-                        try { text.text = "Complete."; } catch (completeTextErr) {}
-                        try { win.update(); } catch (completeUpdateErr) {}
-                    }
-                    forceCloseProgressWindow(win);
-                }
+                setText: function (s) { host.setText(s); },
+                tick: function (s) { host.tick(s); },
+                isCancelled: function () { return host.isCancelled(); },
+                close: function () { host.finish(); }
             };
         } catch (err) {
-            forceCloseProgressWindow(win);
+            try { host.finish(); } catch (finishErr) {}
             return null;
         }
     }
 
-    function forceCloseProgressWindow(explicitWindow) {
-        var target = explicitWindow || null;
-        if (!target) {
-            try { target = $.global[PROGRESS_WINDOW_GLOBAL_KEY]; } catch (readProgressErr) {}
-        }
-
-        if (target) {
-            try { target.onClose = null; } catch (clearOnCloseErr) {}
-            try { target.visible = false; } catch (visibilityErr) {}
-            try { target.hide(); } catch (hideErr) {}
-            try { target.close(); } catch (closeErr) {}
-        }
-        try { $.global[PROGRESS_WINDOW_GLOBAL_KEY] = null; } catch (clearProgressErr) {}
-    }
-
     function showReport(report) {
-        forceCloseProgressWindow();
         if (!report || report.length === 0) {
             alert(SCRIPT_NAME + ": nothing to do.");
             return;
@@ -646,7 +668,6 @@
     }
 
     function showProjectPreviewReport(report) {
-        forceCloseProgressWindow();
         var dlg = new Window("dialog", SCRIPT_NAME + " — project-wide preview");
         dlg.orientation = "column";
         dlg.alignChildren = ["fill", "fill"];
